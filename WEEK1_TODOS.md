@@ -9,10 +9,57 @@
 ### Scalability Concepts
 - [ ] Đọc "Designing Data-Intensive Applications" Chapter 1 - Scalability (pages 1-30)
 - [ ] Viết notes: Định nghĩa chính xác của "scalability" trong 2 câu
+      As the system grows (in data volume, traffic volume, or complexity), there should
+be reasonable ways of dealing with that growth. 
 - [ ] Liệt kê 5 điểm khác biệt giữa vertical và horizontal scaling
+      + Cách mở rộng: một máy mạnh hơn - thêm nhiều máy
+      + Giới hạn: có - không giới hạn
+      + Khả năng chịu lỗi: kém - tốt
+      + Độ phức tạp khi vận hành: dễ - khó
+      + Quy mô: Nhỏ, Trung - Trung, Lớn
+      
 - [ ] Tìm 3 real-world examples của vertical scaling (và tại sao họ chọn)
+      + Blog cá nhân: Rẻ, đơn giản
+      + ERP nội bộ: ít user
+      + Single DB
 - [ ] Tìm 3 real-world examples của horizontal scaling (và tại sao họ chọn)
+      + Nexflix API: Scale lớn
+      + Shopee: Flash Sale Traffic
+      + Redis, Cache Cluster: Cache phải cực nhanh, RAM có giới hạn, Data lớn
 - [ ] Đọc về "Amdahl's Law" và viết công thức + giải thích ý nghĩa
+      + Công thức: Speedup =  1/(S+ P/N)
+      + S = phần không thể song song (serial)
+      + P = phần có thể song song
+      + N = số core
+      + Speedup_real = 1 / (S + (1-S)/N + Overhead)
+      + Overhead = Context switch/Lock contention/GC
+| Loại Serial                   | Ví dụ                                | Vì sao làm chậm             |
+| ----------------------------- | ------------------------------------ | --------------------------- |
+| 🔒 **Lock / synchronized**    | `synchronized`, `ReentrantLock`      | Chỉ 1 thread vào → xếp hàng |
+| 🗄️ **Database bottleneck**   | Transaction dài, `SELECT FOR UPDATE` | DB xử lý tuần tự            |
+| 💾 **IO blocking**            | Đọc file, gọi API, upload            | Thread đứng chờ             |
+| 🔌 **Chung tài nguyên**       | 1 file, 1 connection, 1 queue        | Phải đợi nhau               |
+| 📐 **Logic bắt buộc tuần tự** | step1 → step2 → step3                | Không tách được             |
+| 🚀 **Init / Startup**         | Load config, warmup                  | Chạy 1 luồng                |
+| 🧹 **GC Pause (Java)**        | Stop-the-world GC                    | Tất cả đứng im              |
+| 📝 **Logging đồng bộ**        | File log sync                        | Block thread                |
+| 🔁 **Single-thread executor** | `newSingleThreadExecutor()`          | Ép về 1 luồng               |
+
+Scalability = Throughput (RPS, job/s) tăng theo server.
+
+Amdahl nói:
+
+❌ Thêm server ≠ tăng vô hạn
+✅ Phải giảm cổ chai trước
+
+5️⃣ Serial trong hệ thống thường là
+
+✔ Database
+✔ Hot key Redis
+✔ Single Leader
+✔ Lock global
+✔ Queue 1 partition
+✔ File dùng chung
 - [ ] Đọc về "Gustafson's Law" và so sánh với Amdahl's Law
 
 ### Performance Metrics
