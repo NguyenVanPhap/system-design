@@ -216,36 +216,36 @@ Amdahl nói:
       
       **Bảng: Loại Serial trong Multithreading**
       
-      | Loại Serial (Multithreading) | Ví dụ                                | Vì sao làm chậm             | Định luật áp dụng | Giải thích |
-      | ----------------------------- | ------------------------------------ | --------------------------- | ----------------- | ---------- |
-      | 🔒 **Lock / synchronized**    | `synchronized`, `ReentrantLock`      | Chỉ 1 thread vào → xếp hàng | **Amdahl** | Lock block > 10% thread → phải fix (fine-grained) |
-      | 💾 **IO blocking**            | Đọc file, gọi API, upload            | Thread đứng chờ             | **Amdahl** | IO blocking > 10% time → phải fix (async, non-blocking) |
-      | 🧹 **GC Pause (Java)**        | Stop-the-world GC                    | Tất cả đứng im              | **Amdahl** | GC pause > 10% time → phải fix (tune GC, reduce allocation) |
-      | 📝 **Logging đồng bộ**        | File log sync                        | Block thread                | **Amdahl** | Sync logging > 10% time → phải fix (async logging) |
-      | 🔁 **Single-thread executor** | `newSingleThreadExecutor()`          | Ép về 1 luồng               | **Gustafson** | Nếu có nhiều executor khác → không đáng kể |
+| Loại Serial (Multithreading) | Ví dụ                                | Vì sao làm chậm             | Định luật áp dụng | Giải thích |
+| ----------------------------- | ------------------------------------ | --------------------------- | ----------------- | ---------- |
+| 🔒 **Lock / synchronized**    | `synchronized`, `ReentrantLock`      | Chỉ 1 thread vào → xếp hàng | **Amdahl** | Lock block > 10% thread → phải fix (fine-grained) |
+| 💾 **IO blocking**            | Đọc file, gọi API, upload            | Thread đứng chờ             | **Amdahl** | IO blocking > 10% time → phải fix (async, non-blocking) |
+| 🧹 **GC Pause (Java)**        | Stop-the-world GC                    | Tất cả đứng im              | **Amdahl** | GC pause > 10% time → phải fix (tune GC, reduce allocation) |
+| 📝 **Logging đồng bộ**        | File log sync                        | Block thread                | **Amdahl** | Sync logging > 10% time → phải fix (async logging) |
+| 🔁 **Single-thread executor** | `newSingleThreadExecutor()`          | Ép về 1 luồng               | **Gustafson** | Nếu có nhiều executor khác → không đáng kể |
       
       **Decision Matrix - Multithreading**
       
-      | Tình huống | Câu hỏi | Amdahl (Phải fix) | Gustafson (Có thể bỏ qua) |
-      |------------|---------|-------------------|---------------------------|
-      | **Thread Pool Size** | Serial task chiếm bao nhiêu % thời gian? | > 10% → Giảm serial (lock, sync) | < 1% → Không cần fix, có nhiều task khác |
-      | **Lock Contention** | Lock này block bao nhiêu % thread? | > 10% thread → Fine-grained lock | < 1% thread → Không cần fix |
-      | **Critical Section** | Critical section chiếm bao nhiêu % thời gian? | > 10% → Optimize, giảm thời gian | < 1% → Không cần fix |
-      | **Task Distribution** | 1 task lớn vs nhiều task nhỏ? | 1 task lớn → Chia nhỏ (Amdahl) | Nhiều task nhỏ → Thread pool (Gustafson) |
-      | **Context Switch** | Context switch overhead? | > 10% → Giảm số thread | < 1% → Không cần fix |
+| Tình huống | Câu hỏi | Amdahl (Phải fix) | Gustafson (Có thể bỏ qua) |
+|------------|---------|-------------------|---------------------------|
+| **Thread Pool Size** | Serial task chiếm bao nhiêu % thời gian? | > 10% → Giảm serial (lock, sync) | < 1% → Không cần fix, có nhiều task khác |
+| **Lock Contention** | Lock này block bao nhiêu % thread? | > 10% thread → Fine-grained lock | < 1% thread → Không cần fix |
+| **Critical Section** | Critical section chiếm bao nhiêu % thời gian? | > 10% → Optimize, giảm thời gian | < 1% → Không cần fix |
+| **Task Distribution** | 1 task lớn vs nhiều task nhỏ? | 1 task lớn → Chia nhỏ (Amdahl) | Nhiều task nhỏ → Thread pool (Gustafson) |
+| **Context Switch** | Context switch overhead? | > 10% → Giảm số thread | < 1% → Không cần fix |
       
       **Ví dụ Multithreading:**
       
-      | Tình huống | Dùng định luật nào | Giải thích |
-      |------------|---------------------|------------|
-      | Sort 1 mảng lớn với nhiều threads | **Amdahl** | Task cố định (1 mảng), phần merge là serial bottleneck |
-      | Xử lý 1000 request với thread pool | **Gustafson** | Nhiều request độc lập, mỗi thread xử lý 1 request |
-      | Parallel for loop xử lý array | **Amdahl** | Array cố định, chia nhỏ và xử lý, nhưng có overhead |
-      | Producer-Consumer với nhiều workers | **Gustafson** | Nhiều item trong queue, mỗi worker xử lý item riêng |
-      | Tính toán matrix với shared memory | **Amdahl** | Matrix cố định, chia nhỏ nhưng có memory contention |
-      | Web server xử lý nhiều HTTP request | **Gustafson** | Nhiều request độc lập, mỗi thread xử lý 1 request |
-      | Image processing: xử lý nhiều ảnh | **Gustafson** | Nhiều ảnh độc lập, mỗi thread xử lý 1 ảnh |
-      | Image processing: xử lý 1 ảnh lớn | **Amdahl** | 1 ảnh cố định, chia nhỏ nhưng có overhead merge |
+| Tình huống | Dùng định luật nào | Giải thích |
+|------------|---------------------|------------|
+| Sort 1 mảng lớn với nhiều threads | **Amdahl** | Task cố định (1 mảng), phần merge là serial bottleneck |
+| Xử lý 1000 request với thread pool | **Gustafson** | Nhiều request độc lập, mỗi thread xử lý 1 request |
+| Parallel for loop xử lý array | **Amdahl** | Array cố định, chia nhỏ và xử lý, nhưng có overhead |
+| Producer-Consumer với nhiều workers | **Gustafson** | Nhiều item trong queue, mỗi worker xử lý item riêng |
+| Tính toán matrix với shared memory | **Amdahl** | Matrix cố định, chia nhỏ nhưng có memory contention |
+| Web server xử lý nhiều HTTP request | **Gustafson** | Nhiều request độc lập, mỗi thread xử lý 1 request |
+| Image processing: xử lý nhiều ảnh | **Gustafson** | Nhiều ảnh độc lập, mỗi thread xử lý 1 ảnh |
+| Image processing: xử lý 1 ảnh lớn | **Amdahl** | 1 ảnh cố định, chia nhỏ nhưng có overhead merge |
       
       **Bài học cho Multithreading:**
       - **Dùng Amdahl khi**: Cần xử lý nhanh 1 task lớn → phải giảm phần serial (lock, sync)
@@ -268,14 +268,14 @@ Amdahl nói:
       
       **Bước 2: Decision Matrix - System Design**
       
-      | Bottleneck | Câu hỏi | Amdahl (Phải fix) | Gustafson (Có thể bỏ qua) |
-      |------------|---------|-------------------|---------------------------|
-      | **Hot Key Redis** | Key này chiếm bao nhiêu % traffic? | > 10% traffic → Shard key, cache local | < 1% traffic → Không cần fix, có nhiều key khác |
-      | **Single Leader** | Leader này xử lý bao nhiêu % write? | > 10% write → Shard, multi-leader | < 1% write → Không cần fix, có nhiều partition khác |
-      | **Lock Global** | Lock này block bao nhiêu % request? | > 10% request → Fine-grained lock | < 1% request → Không cần fix, có nhiều task khác |
-      | **Queue 1 Partition** | Partition này xử lý bao nhiêu % message? | > 10% message → Tăng partition | < 1% message → Không cần fix, có nhiều partition khác |
-      | **File dùng chung** | File này xử lý bao nhiêu % I/O? | > 10% I/O → File riêng, shard | < 1% I/O → Không cần fix, có nhiều file khác |
-      | **Database** | DB này xử lý bao nhiêu % query? | > 10% query → Read replica, shard, cache | < 1% query → Không cần fix, có nhiều DB khác |
+| Bottleneck | Câu hỏi | Amdahl (Phải fix) | Gustafson (Có thể bỏ qua) |
+|------------|---------|-------------------|---------------------------|
+| **Hot Key Redis** | Key này chiếm bao nhiêu % traffic? | > 10% traffic → Shard key, cache local | < 1% traffic → Không cần fix, có nhiều key khác |
+| **Single Leader** | Leader này xử lý bao nhiêu % write? | > 10% write → Shard, multi-leader | < 1% write → Không cần fix, có nhiều partition khác |
+| **Lock Global** | Lock này block bao nhiêu % request? | > 10% request → Fine-grained lock | < 1% request → Không cần fix, có nhiều task khác |
+| **Queue 1 Partition** | Partition này xử lý bao nhiêu % message? | > 10% message → Tăng partition | < 1% message → Không cần fix, có nhiều partition khác |
+| **File dùng chung** | File này xử lý bao nhiêu % I/O? | > 10% I/O → File riêng, shard | < 1% I/O → Không cần fix, có nhiều file khác |
+| **Database** | DB này xử lý bao nhiêu % query? | > 10% query → Read replica, shard, cache | < 1% query → Không cần fix, có nhiều DB khác |
       
       **Bước 3: Scalability trong System Design - Liên hệ với Amdahl/Gustafson**
       
@@ -299,13 +299,13 @@ Amdahl nói:
       
       **Decision Matrix - Scalability Patterns:**
       
-      | Scaling Type | Workload | Định luật | Khi nào dùng | Bottleneck |
-      |--------------|----------|-----------|--------------|------------|
-      | **Vertical Scaling** | Cố định | **Amdahl** | Workload nhỏ, muốn xử lý nhanh hơn | I/O, network, phần cứng max |
-      | **Horizontal Scaling** | Tăng theo server | **Gustafson** | Workload lớn, muốn xử lý nhiều hơn | Load balancing, consistency |
-      | **Read Replica** | Read tăng | **Gustafson** | Nhiều read request độc lập | Write consistency |
-      | **Sharding** | Data tăng | **Gustafson** | Data lớn, chia thành nhiều shard | Cross-shard query |
-      | **Caching** | Read tăng | **Gustafson** | Nhiều read request giống nhau | Cache invalidation |
+| Scaling Type | Workload | Định luật | Khi nào dùng | Bottleneck |
+|--------------|----------|-----------|--------------|------------|
+| **Vertical Scaling** | Cố định | **Amdahl** | Workload nhỏ, muốn xử lý nhanh hơn | I/O, network, phần cứng max |
+| **Horizontal Scaling** | Tăng theo server | **Gustafson** | Workload lớn, muốn xử lý nhiều hơn | Load balancing, consistency |
+| **Read Replica** | Read tăng | **Gustafson** | Nhiều read request độc lập | Write consistency |
+| **Sharding** | Data tăng | **Gustafson** | Data lớn, chia thành nhiều shard | Cross-shard query |
+| **Caching** | Read tăng | **Gustafson** | Nhiều read request giống nhau | Cache invalidation |
       
       **Scalability Metrics:**
       - **Throughput**: RPS/QPS tăng theo số server
@@ -492,19 +492,19 @@ Amdahl nói:
       
       **📚 Tóm Tắt:**
       
-      | Khía cạnh | Amdahl/Gustafson | Cần học thêm |
-      |-----------|------------------|--------------|
-      | **Performance** | ✅ Giải quyết | - |
-      | **Consistency** | ❌ Không | CAP theorem, ACID vs BASE |
-      | **Availability** | ❌ Không | Redundancy, failure handling |
-      | **Network** | ❌ Không | CDN, edge computing, latency |
-      | **Cost** | ❌ Không | Cost optimization, TCO |
-      | **Operations** | ❌ Không | Monitoring, observability |
-      | **Partitioning** | ❌ Không | Sharding strategies |
-      | **Load Balancing** | ❌ Không | LB algorithms, session management |
-      | **Caching** | ❌ Không | Cache patterns, invalidation |
-      | **Messaging** | ❌ Không | Message queue patterns |
-      | **Replication** | ❌ Không | Replication patterns |
+| Khía cạnh | Amdahl/Gustafson | Cần học thêm |
+|-----------|------------------|--------------|
+| **Performance** | ✅ Giải quyết | - |
+| **Consistency** | ❌ Không | CAP theorem, ACID vs BASE |
+| **Availability** | ❌ Không | Redundancy, failure handling |
+| **Network** | ❌ Không | CDN, edge computing, latency |
+| **Cost** | ❌ Không | Cost optimization, TCO |
+| **Operations** | ❌ Không | Monitoring, observability |
+| **Partitioning** | ❌ Không | Sharding strategies |
+| **Load Balancing** | ❌ Không | LB algorithms, session management |
+| **Caching** | ❌ Không | Cache patterns, invalidation |
+| **Messaging** | ❌ Không | Message queue patterns |
+| **Replication** | ❌ Không | Replication patterns |
       
       **Kết luận:**
       - Amdahl/Gustafson là **nền tảng quan trọng** để hiểu performance khi scale
