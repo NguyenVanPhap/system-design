@@ -1,46 +1,48 @@
 # Week 1 – Fundamentals: Scalability & Availability
 
-> **Mentor Note**: Đây là TODO list nghiêm khắc. Mỗi item phải được hoàn thành 100%. Không có "gần như xong" hay "hiểu đại khái". Bạn phải CODE, MEASURE, và DOCUMENT.
+> **Mentor Note**: Đây là TODO list nghiêm khắc. Mỗi item phải được hoàn thành 100%. Không có "gần như xong" hay "hiểu
+> đại khái". Bạn phải CODE, MEASURE, và DOCUMENT.
 
 ---
 
 ## Study TODOs
 
 ### Scalability Concepts
+
 - [ ] Đọc "Designing Data-Intensive Applications" Chapter 1 - Scalability (pages 1-30)
 - [ ] Viết notes: Định nghĩa chính xác của "scalability" trong 2 câu
-      As the system grows (in data volume, traffic volume, or complexity), there should
-be reasonable ways of dealing with that growth. 
+  As the system grows (in data volume, traffic volume, or complexity), there should
+  be reasonable ways of dealing with that growth.
 - [ ] Liệt kê 5 điểm khác biệt giữa vertical và horizontal scaling
-      + Cách mở rộng: một máy mạnh hơn - thêm nhiều máy
-      + Giới hạn: có - không giới hạn
-      + Khả năng chịu lỗi: kém - tốt
-      + Độ phức tạp khi vận hành: dễ - khó
-      + Quy mô: Nhỏ, Trung - Trung, Lớn
-      
+  + Cách mở rộng: một máy mạnh hơn - thêm nhiều máy
+  + Giới hạn: có - không giới hạn
+  + Khả năng chịu lỗi: kém - tốt
+  + Độ phức tạp khi vận hành: dễ - khó
+  + Quy mô: Nhỏ, Trung - Trung, Lớn
+
 - [ ] Tìm 3 real-world examples của vertical scaling (và tại sao họ chọn)
-      + Blog cá nhân: Rẻ, đơn giản
-      + ERP nội bộ: ít user
-      + Single DB
+  + Blog cá nhân: Rẻ, đơn giản
+  + ERP nội bộ: ít user
+  + Single DB
 - [ ] Tìm 3 real-world examples của horizontal scaling (và tại sao họ chọn)
-      + Nexflix API: Scale lớn
-      + Shopee: Flash Sale Traffic
-      + Redis, Cache Cluster: Cache phải cực nhanh, RAM có giới hạn, Data lớn
+  + Nexflix API: Scale lớn
+  + Shopee: Flash Sale Traffic
+  + Redis, Cache Cluster: Cache phải cực nhanh, RAM có giới hạn, Data lớn
 - [ ] Đọc về "Amdahl's Law" và viết công thức + giải thích ý nghĩa
-      **Công thức:**
-      ```
-      Speedup = 1 / ((1-P) + P/N)
-      ```
-      Hoặc viết dưới dạng:
-      ```
-      Speedup = 1 / (S + (1-S)/N)
-      ```
-      Trong đó:
-      - **S** = phần không thể song song (serial portion), tỷ lệ từ 0 đến 1
-      - **P** = phần có thể song song (parallel portion), P = 1 - S
-      - **N** = số lõi/tài nguyên xử lý (số processors/cores)
-      - **Speedup** = mức tăng tốc so với chạy tuần tự
-      
+  **Công thức:**
+  ```
+  Speedup = 1 / ((1-P) + P/N)
+  ```
+  Hoặc viết dưới dạng:
+  ```
+  Speedup = 1 / (S + (1-S)/N)
+  ```
+  Trong đó:
+  - **S** = phần không thể song song (serial portion), tỷ lệ từ 0 đến 1
+  - **P** = phần có thể song song (parallel portion), P = 1 - S
+  - **N** = số lõi/tài nguyên xử lý (số processors/cores)
+  - **Speedup** = mức tăng tốc so với chạy tuần tự
+
       **Ý nghĩa:**
       - Amdahl's Law cho thấy giới hạn tối đa của việc tăng tốc khi chỉ một phần công việc có thể song song hóa
       - Phần serial (không thể song song) luôn là bottleneck và giới hạn hiệu suất của toàn hệ thống
@@ -49,12 +51,12 @@ be reasonable ways of dealing with that growth.
         - Overhead bao gồm: Context switch, Lock contention, Garbage Collection, Network latency
       - **Bài học**: Muốn scale hiệu quả, phải giảm phần serial (bottleneck) trước khi thêm tài nguyên
 
-| Loại Serial (System Design)   | Ví dụ                                | Vì sao làm chậm             | Định luật áp dụng | Giải thích |
-| ----------------------------- | ------------------------------------ | --------------------------- | ----------------- | ---------- |
-| 🗄️ **Database bottleneck**   | Transaction dài, `SELECT FOR UPDATE` | DB xử lý tuần tự            | **Amdahl** | DB bottleneck > 10% query → phải fix (replica, shard) |
-| 🔌 **Chung tài nguyên**       | 1 file, 1 connection, 1 queue        | Phải đợi nhau               | **Amdahl** | Shared resource > 10% contention → phải fix (shard, separate) |
-| 📐 **Logic bắt buộc tuần tự** | step1 → step2 → step3                | Không tách được             | **Amdahl** | Serial logic > 10% time → phải optimize |
-| 🚀 **Init / Startup**         | Load config, warmup                  | Chạy 1 luồng                | **Gustafson** | Init < 1% total time → không đáng kể, có nhiều task khác |
+| Loại Serial (System Design)   | Ví dụ                                | Vì sao làm chậm  | Định luật áp dụng | Giải thích                                                    |
+|-------------------------------|--------------------------------------|------------------|-------------------|---------------------------------------------------------------|
+| 🗄️ **Database bottleneck**   | Transaction dài, `SELECT FOR UPDATE` | DB xử lý tuần tự | **Amdahl**        | DB bottleneck > 10% query → phải fix (replica, shard)         |
+| 🔌 **Chung tài nguyên**       | 1 file, 1 connection, 1 queue        | Phải đợi nhau    | **Amdahl**        | Shared resource > 10% contention → phải fix (shard, separate) |
+| 📐 **Logic bắt buộc tuần tự** | step1 → step2 → step3                | Không tách được  | **Amdahl**        | Serial logic > 10% time → phải optimize                       |
+| 🚀 **Init / Startup**         | Load config, warmup                  | Chạy 1 luồng     | **Gustafson**     | Init < 1% total time → không đáng kể, có nhiều task khác      |
 
 Scalability = Throughput (RPS, job/s) tăng theo server.
 
@@ -63,35 +65,35 @@ Amdahl nói:
 ❌ Thêm server ≠ tăng vô hạn
 ✅ Phải giảm cổ chai trước
 
-5️⃣ Serial trong hệ thống thường là 
+5️⃣ Serial trong hệ thống thường là
 
-| Bottleneck            | Nghĩa là gì                   | Serial ở đâu        | Dấu hiệu thường gặp                      | Scale app có giúp không? | Định luật áp dụng | Cách xử lý chính                 |
-| --------------------- | ----------------------------- | ------------------- | ---------------------------------------- | ------------------------ | ----------------- | -------------------------------- |
-| **Database**          | DB xử lý quá nhiều read/write | 1 DB node / primary | Query chậm, CPU DB 100%, connection full | ❌ Không                  | **Amdahl** (> 10% query) | Read replica, sharding, cache    |
+| Bottleneck            | Nghĩa là gì                   | Serial ở đâu        | Dấu hiệu thường gặp                      | Scale app có giúp không? | Định luật áp dụng          | Cách xử lý chính                 |
+|-----------------------|-------------------------------|---------------------|------------------------------------------|--------------------------|----------------------------|----------------------------------|
+| **Database**          | DB xử lý quá nhiều read/write | 1 DB node / primary | Query chậm, CPU DB 100%, connection full | ❌ Không                  | **Amdahl** (> 10% query)   | Read replica, sharding, cache    |
 | **Hot Key Redis**     | Nhiều request đập vào 1 key   | Redis single thread | Redis latency cao, key bị spam           | ❌ Không                  | **Amdahl** (> 10% traffic) | Shard key, cache local, cluster  |
-| **Single Leader**     | Chỉ 1 node được write/xử lý   | Leader node         | Write TPS thấp, leader overload          | ❌ Không                  | **Amdahl** (> 10% write) | Shard, multi-leader, partition   |
+| **Single Leader**     | Chỉ 1 node được write/xử lý   | Leader node         | Write TPS thấp, leader overload          | ❌ Không                  | **Amdahl** (> 10% write)   | Shard, multi-leader, partition   |
 | **Lock Global**       | 1 lock khóa toàn hệ thống     | Critical section    | Thread waiting nhiều, TPS thấp           | ❌ Không                  | **Amdahl** (> 10% request) | Fine-grained lock, optimistic    |
 | **Queue 1 Partition** | Queue chỉ có 1 partition      | 1 consumer          | Lag cao, consumer idle                   | ❌ Không                  | **Amdahl** (> 10% message) | Tăng partition, parallel consume |
-| **File dùng chung**   | Nhiều node dùng chung file    | File lock / IO      | IO wait cao, ghi file chậm               | ❌ Không                  | **Amdahl** (> 10% I/O) | File riêng, object storage       |
+| **File dùng chung**   | Nhiều node dùng chung file    | File lock / IO      | IO wait cao, ghi file chậm               | ❌ Không                  | **Amdahl** (> 10% I/O)     | File riêng, object storage       |
 
-**Lưu ý**: Tất cả các bottleneck trên đều áp dụng **Amdahl's Law** khi chiếm > 10% workload. Nếu < 1% workload và có nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (không cần fix).
-
+**Lưu ý**: Tất cả các bottleneck trên đều áp dụng **Amdahl's Law** khi chiếm > 10% workload. Nếu < 1% workload và có
+nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (không cần fix).
 
 - [ ] Đọc về "Gustafson's Law" và so sánh với Amdahl's Law
-      **Gustafson's Law - Công thức:**
-      ```
-      Speedup = (1 - P) + P × N
-      ```
-      Hoặc viết dưới dạng:
-      ```
-      Speedup = S + (1 - S) × N
-      ```
-      Trong đó:
-      - **S** = phần không thể song song (serial portion), tỷ lệ từ 0 đến 1
-      - **P** = phần có thể song song (parallel portion), P = 1 - S
-      - **N** = số lõi/tài nguyên xử lý (số processors/cores)
-      - **Speedup** = mức tăng tốc so với chạy tuần tự
-      
+  **Gustafson's Law - Công thức:**
+  ```
+  Speedup = (1 - P) + P × N
+  ```
+  Hoặc viết dưới dạng:
+  ```
+  Speedup = S + (1 - S) × N
+  ```
+  Trong đó:
+  - **S** = phần không thể song song (serial portion), tỷ lệ từ 0 đến 1
+  - **P** = phần có thể song song (parallel portion), P = 1 - S
+  - **N** = số lõi/tài nguyên xử lý (số processors/cores)
+  - **Speedup** = mức tăng tốc so với chạy tuần tự
+
       **Ý nghĩa:**
       - Gustafson's Law có cách nhìn khác với Amdahl's Law: khi có nhiều lõi hơn, ta có thể **tăng kích thước vấn đề** (scaled speedup)
       - Giả định: Kích thước vấn đề có thể tăng theo số lõi (ví dụ: xử lý nhiều data hơn khi có nhiều CPU hơn)
@@ -100,17 +102,17 @@ Amdahl nói:
       - **Ứng dụng**: Big data processing, distributed systems, khi workload có thể scale theo tài nguyên
       
       **So sánh Amdahl's Law vs Gustafson's Law:**
-      
-| Tiêu chí | **Amdahl's Law** | **Gustafson's Law** |
-|----------|------------------|---------------------|
-| **Giả định** | Kích thước vấn đề **cố định** | Kích thước vấn đề **có thể tăng** |
-| **Công thức** | `Speedup = 1 / (S + (1-S)/N)` | `Speedup = S + (1-S) × N` |
-| **Speedup tối đa** | Bị giới hạn bởi phần serial (hữu hạn) | Gần tuyến tính với N (có thể rất lớn) |
-| **Ví dụ (S=0.1, N=100)** | **9.17x** | **90.1x** |
-| **Quan điểm** | Phần serial là bottleneck nghiêm trọng | Phần serial không cản trở nhiều nếu tăng quy mô |
-| **Ứng dụng thực tế** | Fixed workload, hệ thống hiện tại | Scalable workload, big data, distributed computing |
-| **Bài học** | Phải giảm phần serial trước khi scale | Có thể scale tốt nếu workload tăng theo tài nguyên |
-      
+
+| Tiêu chí                 | **Amdahl's Law**                       | **Gustafson's Law**                                |
+|--------------------------|----------------------------------------|----------------------------------------------------|
+| **Giả định**             | Kích thước vấn đề **cố định**          | Kích thước vấn đề **có thể tăng**                  |
+| **Công thức**            | `Speedup = 1 / (S + (1-S)/N)`          | `Speedup = S + (1-S) × N`                          |
+| **Speedup tối đa**       | Bị giới hạn bởi phần serial (hữu hạn)  | Gần tuyến tính với N (có thể rất lớn)              |
+| **Ví dụ (S=0.1, N=100)** | **9.17x**                              | **90.1x**                                          |
+| **Quan điểm**            | Phần serial là bottleneck nghiêm trọng | Phần serial không cản trở nhiều nếu tăng quy mô    |
+| **Ứng dụng thực tế**     | Fixed workload, hệ thống hiện tại      | Scalable workload, big data, distributed computing |
+| **Bài học**              | Phải giảm phần serial trước khi scale  | Có thể scale tốt nếu workload tăng theo tài nguyên |
+
       **Cái nào đúng? Cái nào sai?**
       
       ✅ **CẢ HAI ĐỀU ĐÚNG** - Không có cái nào sai!
@@ -179,16 +181,16 @@ Amdahl nói:
       - Kết quả: Write throughput tăng gần tuyến tính với số shard
       
       **Khi nào dùng cái nào?**
-      
-| Tình huống | Dùng định luật nào | Lý do |
-|------------|---------------------|-------|
-| API server xử lý request cố định | **Amdahl** | Số request/giây cố định, không tăng theo số server |
-| Database query optimization | **Amdahl** | Query cố định, chỉ muốn chạy nhanh hơn |
-| Big data processing (Hadoop, Spark) | **Gustafson** | Nhiều node hơn → xử lý nhiều data hơn |
-| Video rendering, image processing | **Gustafson** | Nhiều CPU hơn → render nhiều frame hơn |
-| Web scraping với rate limit | **Amdahl** | Rate limit cố định, không tăng theo số worker |
-| Distributed training ML | **Gustafson** | Nhiều GPU hơn → train với dataset lớn hơn |
-      
+
+| Tình huống                          | Dùng định luật nào | Lý do                                              |
+|-------------------------------------|--------------------|----------------------------------------------------|
+| API server xử lý request cố định    | **Amdahl**         | Số request/giây cố định, không tăng theo số server |
+| Database query optimization         | **Amdahl**         | Query cố định, chỉ muốn chạy nhanh hơn             |
+| Big data processing (Hadoop, Spark) | **Gustafson**      | Nhiều node hơn → xử lý nhiều data hơn              |
+| Video rendering, image processing   | **Gustafson**      | Nhiều CPU hơn → render nhiều frame hơn             |
+| Web scraping với rate limit         | **Amdahl**         | Rate limit cố định, không tăng theo số worker      |
+| Distributed training ML             | **Gustafson**      | Nhiều GPU hơn → train với dataset lớn hơn          |
+
       **Kết luận:**
       - **Amdahl's Law**: Cảnh báo rằng lợi ích của song song hóa có giới hạn nghiêm ngặt, phải giảm bottleneck serial
       - **Gustafson's Law**: Cho thấy nếu ta **tăng quy mô vấn đề** cùng với tăng tài nguyên, lợi ích có thể tăng gần tuyến tính
@@ -215,38 +217,38 @@ Amdahl nói:
       - **Lợi ích**: Không có bottleneck serial giữa các task
       
       **Bảng: Loại Serial trong Multithreading**
-      
-| Loại Serial (Multithreading) | Ví dụ                                | Vì sao làm chậm             | Định luật áp dụng | Giải thích |
-| ----------------------------- | ------------------------------------ | --------------------------- | ----------------- | ---------- |
-| 🔒 **Lock / synchronized**    | `synchronized`, `ReentrantLock`      | Chỉ 1 thread vào → xếp hàng | **Amdahl** | Lock block > 10% thread → phải fix (fine-grained) |
-| 💾 **IO blocking**            | Đọc file, gọi API, upload            | Thread đứng chờ             | **Amdahl** | IO blocking > 10% time → phải fix (async, non-blocking) |
-| 🧹 **GC Pause (Java)**        | Stop-the-world GC                    | Tất cả đứng im              | **Amdahl** | GC pause > 10% time → phải fix (tune GC, reduce allocation) |
-| 📝 **Logging đồng bộ**        | File log sync                        | Block thread                | **Amdahl** | Sync logging > 10% time → phải fix (async logging) |
-| 🔁 **Single-thread executor** | `newSingleThreadExecutor()`          | Ép về 1 luồng               | **Gustafson** | Nếu có nhiều executor khác → không đáng kể |
-      
+
+| Loại Serial (Multithreading)  | Ví dụ                           | Vì sao làm chậm             | Định luật áp dụng | Giải thích                                                  |
+|-------------------------------|---------------------------------|-----------------------------|-------------------|-------------------------------------------------------------|
+| 🔒 **Lock / synchronized**    | `synchronized`, `ReentrantLock` | Chỉ 1 thread vào → xếp hàng | **Amdahl**        | Lock block > 10% thread → phải fix (fine-grained)           |
+| 💾 **IO blocking**            | Đọc file, gọi API, upload       | Thread đứng chờ             | **Amdahl**        | IO blocking > 10% time → phải fix (async, non-blocking)     |
+| 🧹 **GC Pause (Java)**        | Stop-the-world GC               | Tất cả đứng im              | **Amdahl**        | GC pause > 10% time → phải fix (tune GC, reduce allocation) |
+| 📝 **Logging đồng bộ**        | File log sync                   | Block thread                | **Amdahl**        | Sync logging > 10% time → phải fix (async logging)          |
+| 🔁 **Single-thread executor** | `newSingleThreadExecutor()`     | Ép về 1 luồng               | **Gustafson**     | Nếu có nhiều executor khác → không đáng kể                  |
+
       **Decision Matrix - Multithreading**
-      
-| Tình huống | Câu hỏi | Amdahl (Phải fix) | Gustafson (Có thể bỏ qua) |
-|------------|---------|-------------------|---------------------------|
-| **Thread Pool Size** | Serial task chiếm bao nhiêu % thời gian? | > 10% → Giảm serial (lock, sync) | < 1% → Không cần fix, có nhiều task khác |
-| **Lock Contention** | Lock này block bao nhiêu % thread? | > 10% thread → Fine-grained lock | < 1% thread → Không cần fix |
-| **Critical Section** | Critical section chiếm bao nhiêu % thời gian? | > 10% → Optimize, giảm thời gian | < 1% → Không cần fix |
-| **Task Distribution** | 1 task lớn vs nhiều task nhỏ? | 1 task lớn → Chia nhỏ (Amdahl) | Nhiều task nhỏ → Thread pool (Gustafson) |
-| **Context Switch** | Context switch overhead? | > 10% → Giảm số thread | < 1% → Không cần fix |
-      
+
+| Tình huống            | Câu hỏi                                       | Amdahl (Phải fix)                | Gustafson (Có thể bỏ qua)                |
+|-----------------------|-----------------------------------------------|----------------------------------|------------------------------------------|
+| **Thread Pool Size**  | Serial task chiếm bao nhiêu % thời gian?      | > 10% → Giảm serial (lock, sync) | < 1% → Không cần fix, có nhiều task khác |
+| **Lock Contention**   | Lock này block bao nhiêu % thread?            | > 10% thread → Fine-grained lock | < 1% thread → Không cần fix              |
+| **Critical Section**  | Critical section chiếm bao nhiêu % thời gian? | > 10% → Optimize, giảm thời gian | < 1% → Không cần fix                     |
+| **Task Distribution** | 1 task lớn vs nhiều task nhỏ?                 | 1 task lớn → Chia nhỏ (Amdahl)   | Nhiều task nhỏ → Thread pool (Gustafson) |
+| **Context Switch**    | Context switch overhead?                      | > 10% → Giảm số thread           | < 1% → Không cần fix                     |
+
       **Ví dụ Multithreading:**
-      
-| Tình huống | Dùng định luật nào | Giải thích |
-|------------|---------------------|------------|
-| Sort 1 mảng lớn với nhiều threads | **Amdahl** | Task cố định (1 mảng), phần merge là serial bottleneck |
-| Xử lý 1000 request với thread pool | **Gustafson** | Nhiều request độc lập, mỗi thread xử lý 1 request |
-| Parallel for loop xử lý array | **Amdahl** | Array cố định, chia nhỏ và xử lý, nhưng có overhead |
-| Producer-Consumer với nhiều workers | **Gustafson** | Nhiều item trong queue, mỗi worker xử lý item riêng |
-| Tính toán matrix với shared memory | **Amdahl** | Matrix cố định, chia nhỏ nhưng có memory contention |
-| Web server xử lý nhiều HTTP request | **Gustafson** | Nhiều request độc lập, mỗi thread xử lý 1 request |
-| Image processing: xử lý nhiều ảnh | **Gustafson** | Nhiều ảnh độc lập, mỗi thread xử lý 1 ảnh |
-| Image processing: xử lý 1 ảnh lớn | **Amdahl** | 1 ảnh cố định, chia nhỏ nhưng có overhead merge |
-      
+
+| Tình huống                          | Dùng định luật nào | Giải thích                                             |
+|-------------------------------------|--------------------|--------------------------------------------------------|
+| Sort 1 mảng lớn với nhiều threads   | **Amdahl**         | Task cố định (1 mảng), phần merge là serial bottleneck |
+| Xử lý 1000 request với thread pool  | **Gustafson**      | Nhiều request độc lập, mỗi thread xử lý 1 request      |
+| Parallel for loop xử lý array       | **Amdahl**         | Array cố định, chia nhỏ và xử lý, nhưng có overhead    |
+| Producer-Consumer với nhiều workers | **Gustafson**      | Nhiều item trong queue, mỗi worker xử lý item riêng    |
+| Tính toán matrix với shared memory  | **Amdahl**         | Matrix cố định, chia nhỏ nhưng có memory contention    |
+| Web server xử lý nhiều HTTP request | **Gustafson**      | Nhiều request độc lập, mỗi thread xử lý 1 request      |
+| Image processing: xử lý nhiều ảnh   | **Gustafson**      | Nhiều ảnh độc lập, mỗi thread xử lý 1 ảnh              |
+| Image processing: xử lý 1 ảnh lớn   | **Amdahl**         | 1 ảnh cố định, chia nhỏ nhưng có overhead merge        |
+
       **Bài học cho Multithreading:**
       - **Dùng Amdahl khi**: Cần xử lý nhanh 1 task lớn → phải giảm phần serial (lock, sync)
       - **Dùng Gustafson khi**: Có nhiều task độc lập → tăng số thread để xử lý nhiều task hơn
@@ -267,16 +269,16 @@ Amdahl nói:
          - Có thể tăng → **Nghe Gustafson** → Tăng workload để bottleneck không đáng kể
       
       **Bước 2: Decision Matrix - System Design**
-      
-| Bottleneck | Câu hỏi | Amdahl (Phải fix) | Gustafson (Có thể bỏ qua) |
-|------------|---------|-------------------|---------------------------|
-| **Hot Key Redis** | Key này chiếm bao nhiêu % traffic? | > 10% traffic → Shard key, cache local | < 1% traffic → Không cần fix, có nhiều key khác |
-| **Single Leader** | Leader này xử lý bao nhiêu % write? | > 10% write → Shard, multi-leader | < 1% write → Không cần fix, có nhiều partition khác |
-| **Lock Global** | Lock này block bao nhiêu % request? | > 10% request → Fine-grained lock | < 1% request → Không cần fix, có nhiều task khác |
-| **Queue 1 Partition** | Partition này xử lý bao nhiêu % message? | > 10% message → Tăng partition | < 1% message → Không cần fix, có nhiều partition khác |
-| **File dùng chung** | File này xử lý bao nhiêu % I/O? | > 10% I/O → File riêng, shard | < 1% I/O → Không cần fix, có nhiều file khác |
-| **Database** | DB này xử lý bao nhiêu % query? | > 10% query → Read replica, shard, cache | < 1% query → Không cần fix, có nhiều DB khác |
-      
+
+| Bottleneck            | Câu hỏi                                  | Amdahl (Phải fix)                        | Gustafson (Có thể bỏ qua)                             |
+|-----------------------|------------------------------------------|------------------------------------------|-------------------------------------------------------|
+| **Hot Key Redis**     | Key này chiếm bao nhiêu % traffic?       | > 10% traffic → Shard key, cache local   | < 1% traffic → Không cần fix, có nhiều key khác       |
+| **Single Leader**     | Leader này xử lý bao nhiêu % write?      | > 10% write → Shard, multi-leader        | < 1% write → Không cần fix, có nhiều partition khác   |
+| **Lock Global**       | Lock này block bao nhiêu % request?      | > 10% request → Fine-grained lock        | < 1% request → Không cần fix, có nhiều task khác      |
+| **Queue 1 Partition** | Partition này xử lý bao nhiêu % message? | > 10% message → Tăng partition           | < 1% message → Không cần fix, có nhiều partition khác |
+| **File dùng chung**   | File này xử lý bao nhiêu % I/O?          | > 10% I/O → File riêng, shard            | < 1% I/O → Không cần fix, có nhiều file khác          |
+| **Database**          | DB này xử lý bao nhiêu % query?          | > 10% query → Read replica, shard, cache | < 1% query → Không cần fix, có nhiều DB khác          |
+
       **Bước 3: Scalability trong System Design - Liên hệ với Amdahl/Gustafson**
       
       **Định nghĩa Scalability:**
@@ -298,15 +300,15 @@ Amdahl nói:
       - **Ví dụ**: 10 server xử lý 10x request → speedup gần tuyến tính
       
       **Decision Matrix - Scalability Patterns:**
-      
-| Scaling Type | Workload | Định luật | Khi nào dùng | Bottleneck |
-|--------------|----------|-----------|--------------|------------|
-| **Vertical Scaling** | Cố định | **Amdahl** | Workload nhỏ, muốn xử lý nhanh hơn | I/O, network, phần cứng max |
+
+| Scaling Type           | Workload         | Định luật     | Khi nào dùng                       | Bottleneck                  |
+|------------------------|------------------|---------------|------------------------------------|-----------------------------|
+| **Vertical Scaling**   | Cố định          | **Amdahl**    | Workload nhỏ, muốn xử lý nhanh hơn | I/O, network, phần cứng max |
 | **Horizontal Scaling** | Tăng theo server | **Gustafson** | Workload lớn, muốn xử lý nhiều hơn | Load balancing, consistency |
-| **Read Replica** | Read tăng | **Gustafson** | Nhiều read request độc lập | Write consistency |
-| **Sharding** | Data tăng | **Gustafson** | Data lớn, chia thành nhiều shard | Cross-shard query |
-| **Caching** | Read tăng | **Gustafson** | Nhiều read request giống nhau | Cache invalidation |
-      
+| **Read Replica**       | Read tăng        | **Gustafson** | Nhiều read request độc lập         | Write consistency           |
+| **Sharding**           | Data tăng        | **Gustafson** | Data lớn, chia thành nhiều shard   | Cross-shard query           |
+| **Caching**            | Read tăng        | **Gustafson** | Nhiều read request giống nhau      | Cache invalidation          |
+
       **Scalability Metrics:**
       - **Throughput**: RPS/QPS tăng theo số server
       - **Latency**: Thời gian xử lý 1 request
@@ -491,21 +493,21 @@ Amdahl nói:
           - **Cần học**: Replication patterns, read/write splitting, lag handling
       
       **📚 Tóm Tắt:**
-      
-| Khía cạnh | Amdahl/Gustafson | Cần học thêm |
-|-----------|------------------|--------------|
-| **Performance** | ✅ Giải quyết | - |
-| **Consistency** | ❌ Không | CAP theorem, ACID vs BASE |
-| **Availability** | ❌ Không | Redundancy, failure handling |
-| **Network** | ❌ Không | CDN, edge computing, latency |
-| **Cost** | ❌ Không | Cost optimization, TCO |
-| **Operations** | ❌ Không | Monitoring, observability |
-| **Partitioning** | ❌ Không | Sharding strategies |
-| **Load Balancing** | ❌ Không | LB algorithms, session management |
-| **Caching** | ❌ Không | Cache patterns, invalidation |
-| **Messaging** | ❌ Không | Message queue patterns |
-| **Replication** | ❌ Không | Replication patterns |
-      
+
+| Khía cạnh          | Amdahl/Gustafson | Cần học thêm                      |
+|--------------------|------------------|-----------------------------------|
+| **Performance**    | ✅ Giải quyết     | -                                 |
+| **Consistency**    | ❌ Không          | CAP theorem, ACID vs BASE         |
+| **Availability**   | ❌ Không          | Redundancy, failure handling      |
+| **Network**        | ❌ Không          | CDN, edge computing, latency      |
+| **Cost**           | ❌ Không          | Cost optimization, TCO            |
+| **Operations**     | ❌ Không          | Monitoring, observability         |
+| **Partitioning**   | ❌ Không          | Sharding strategies               |
+| **Load Balancing** | ❌ Không          | LB algorithms, session management |
+| **Caching**        | ❌ Không          | Cache patterns, invalidation      |
+| **Messaging**      | ❌ Không          | Message queue patterns            |
+| **Replication**    | ❌ Không          | Replication patterns              |
+
       **Kết luận:**
       - Amdahl/Gustafson là **nền tảng quan trọng** để hiểu performance khi scale
       - Nhưng **chưa đủ** để design system hoàn chỉnh
@@ -513,6 +515,7 @@ Amdahl nói:
       - Amdahl/Gustafson giúp **quyết định khi nào scale**, nhưng không nói **cách scale như thế nào**
 
 ### Performance Metrics
+
 - [ ] Định nghĩa chính xác: Latency, Throughput, QPS, TPS, RPS
 - [ ] Viết công thức tính: QPS = ?
 - [ ] Viết công thức tính: Throughput = ?
@@ -522,6 +525,7 @@ Amdahl nói:
 - [ ] Đọc về "tail latency" và "latency SLOs"
 
 ### Availability Concepts
+
 - [ ] Tính toán downtime cho: 99%, 99.9%, 99.99%, 99.999% (theo năm, tháng, tuần, ngày)
 - [ ] Viết bảng so sánh: Availability % → Downtime/year → Downtime/month
 - [ ] Đọc về "nines" trong availability (3 nines, 4 nines, 5 nines)
@@ -531,6 +535,7 @@ Amdahl nói:
 - [ ] Công thức: Availability = MTBF / (MTBF + MTTR) - verify và hiểu
 
 ### Redundancy Patterns
+
 - [ ] Đọc về Active-Active redundancy pattern
 - [ ] Đọc về Active-Passive (Hot Standby) redundancy pattern
 - [ ] Đọc về Active-Passive (Cold Standby) redundancy pattern
@@ -539,12 +544,14 @@ Amdahl nói:
 - [ ] Tìm 2 real-world examples của Active-Passive
 
 ### Bottleneck Identification
+
 - [ ] Liệt kê 4 loại bottlenecks chính: CPU, Memory, I/O, Network
 - [ ] Với mỗi bottleneck, viết 2 cách identify
 - [ ] Với mỗi bottleneck, viết 2 cách resolve
 - [ ] Đọc về "Amdahl's Law" trong context của bottlenecks
 
 ### Capacity Planning
+
 - [ ] Đọc về "back-of-envelope calculations"
 - [ ] Học cách estimate: Storage requirements
 - [ ] Học cách estimate: Bandwidth requirements
@@ -557,6 +564,7 @@ Amdahl nói:
 ## Design TODOs
 
 ### Design Exercise 1: Payment Gateway
+
 - [ ] Thiết kế architecture diagram cho Payment Gateway (10K TPS, 99.9% uptime)
 - [ ] Vẽ diagram với các components: API Gateway, Payment Service, Database, Cache
 - [ ] Label mỗi component với estimated QPS capacity
@@ -569,6 +577,7 @@ Amdahl nói:
 - [ ] Viết document (500 words) giải thích design decisions
 
 ### Design Exercise 2: Betting Platform
+
 - [ ] Thiết kế architecture cho Betting Platform (100K concurrent users)
 - [ ] Identify bottleneck trong design (CPU, Memory, I/O, Network - chọn 1)
 - [ ] Design solution để resolve bottleneck đó
@@ -581,6 +590,7 @@ Amdahl nói:
 - [ ] Viết document (500 words) về scaling strategy
 
 ### Design Exercise 3: Load Estimation
+
 - [ ] Scenario: E-commerce site, 1M daily active users
 - [ ] Estimate: Peak QPS (assume 20% traffic trong 1 hour)
 - [ ] Estimate: Average request size (assume 5KB)
@@ -597,6 +607,7 @@ Amdahl nói:
 ## Coding TODOs
 
 ### Task 1: Spring Boot Performance App
+
 - [ ] Tạo Spring Boot project mới
 - [ ] Tạo REST API endpoint: `GET /api/users/{id}` (return mock user data)
 - [ ] Tạo REST API endpoint: `POST /api/users` (create user, save to in-memory list)
@@ -607,6 +618,7 @@ Amdahl nói:
 - [ ] Document: Performance baseline
 
 ### Task 2: Load Testing Setup
+
 - [ ] Install JMeter hoặc Gatling
 - [ ] Tạo test plan cho `/api/users/{id}` endpoint
 - [ ] Configure: 100 concurrent users, 1000 total requests
@@ -618,6 +630,7 @@ Amdahl nói:
 - [ ] Tạo report với charts (response time, throughput)
 
 ### Task 3: Performance Profiling
+
 - [ ] Install VisualVM hoặc JProfiler
 - [ ] Attach profiler to Spring Boot app
 - [ ] Run load test while profiling
@@ -629,6 +642,7 @@ Amdahl nói:
 - [ ] Propose: 3 optimizations (không cần implement, chỉ propose)
 
 ### Task 4: Simple Load Balancer
+
 - [ ] Tạo Java class: `SimpleLoadBalancer`
 - [ ] Implement: Round-robin algorithm
 - [ ] Add: List of backend servers (hardcoded URLs)
@@ -641,6 +655,7 @@ Amdahl nói:
 - [ ] Document: Code và test results
 
 ### Task 5: Health Check Endpoints
+
 - [ ] Add endpoint: `GET /health` (basic health check)
 - [ ] Add endpoint: `GET /health/readiness` (readiness probe)
 - [ ] Add endpoint: `GET /health/liveness` (liveness probe)
@@ -652,6 +667,7 @@ Amdahl nói:
 - [ ] Document: Khi nào dùng readiness vs liveness
 
 ### Task 6: Metrics Collection
+
 - [ ] Add Micrometer dependency
 - [ ] Expose metrics endpoint: `GET /actuator/metrics`
 - [ ] Add custom metric: `requests.total` (counter)
@@ -666,6 +682,7 @@ Amdahl nói:
 ## Analysis TODOs
 
 ### Analysis Task 1: Bottleneck Analysis
+
 - [ ] Chọn một Spring Boot app hiện tại (hoặc tạo simple one)
 - [ ] Run load test với increasing load: 10, 50, 100, 500, 1000 concurrent users
 - [ ] Measure: Latency, throughput, error rate cho mỗi load level
@@ -678,6 +695,7 @@ Amdahl nói:
 - [ ] Estimate: Improvement expected từ mỗi solution
 
 ### Analysis Task 2: Capacity Planning
+
 - [ ] Scenario: Design system cho 10M users
 - [ ] Estimate: Peak concurrent users (assume 10% of total)
 - [ ] Estimate: Peak QPS (assume 5 requests/user/minute)
@@ -690,6 +708,7 @@ Amdahl nói:
 - [ ] Validate: Tất cả assumptions có realistic không?
 
 ### Analysis Task 3: Availability Calculation
+
 - [ ] Calculate: Downtime budget cho 99.9% availability (per year)
 - [ ] Calculate: Downtime budget cho 99.99% availability (per year)
 - [ ] Scenario: System có 5 components, mỗi component có 99.9% availability
@@ -702,6 +721,7 @@ Amdahl nói:
 - [ ] Document: Findings và insights
 
 ### Analysis Task 4: Scaling Strategy Comparison
+
 - [ ] Scenario: Payment API, current load = 1K QPS, expected = 10K QPS
 - [ ] Option 1: Vertical scaling (bigger server)
 - [ ] Calculate: Cost của vertical scaling
@@ -714,6 +734,7 @@ Amdahl nói:
 - [ ] Document: Decision matrix
 
 ### Analysis Task 5: Performance Baseline
+
 - [ ] Measure: Current app performance (baseline)
 - [ ] Metrics: QPS, latency (p50, p95, p99), error rate
 - [ ] Document: Baseline performance
@@ -730,6 +751,7 @@ Amdahl nói:
 ## Review TODOs
 
 ### Self-Evaluation
+
 - [ ] Review: Tất cả study TODOs đã hoàn thành chưa?
 - [ ] Review: Tất cả design exercises đã làm chưa?
 - [ ] Review: Tất cả coding tasks đã code và test chưa?
@@ -742,6 +764,7 @@ Amdahl nói:
 - [ ] Plan: Làm sao để clarify 3 concepts còn confuse?
 
 ### Design Review
+
 - [ ] Review Payment Gateway design
 - [ ] Check: Có SPOF không?
 - [ ] Check: Scaling strategy có realistic không?
@@ -752,6 +775,7 @@ Amdahl nói:
 - [ ] Document: Lessons learned
 
 ### Code Review
+
 - [ ] Review: Code quality (clean code principles)
 - [ ] Review: Error handling
 - [ ] Review: Logging và monitoring
@@ -761,6 +785,7 @@ Amdahl nói:
 - [ ] Document: Code review findings
 
 ### Performance Review
+
 - [ ] Review: Load test results
 - [ ] Review: Profiling results
 - [ ] Identify: Top 3 performance issues
@@ -769,6 +794,7 @@ Amdahl nói:
 - [ ] Create: Performance improvement plan
 
 ### Knowledge Check
+
 - [ ] Explain: Vertical vs Horizontal scaling (viết 1 paragraph, không xem notes)
 - [ ] Explain: Availability calculation (viết công thức và example)
 - [ ] Explain: Bottleneck identification process (viết 5 steps)
@@ -779,6 +805,7 @@ Amdahl nói:
 - [ ] Document: Knowledge gaps found
 
 ### Reflection
+
 - [ ] Write: 3 điều học được quan trọng nhất tuần này
 - [ ] Write: 2 điều còn confuse hoặc cần học thêm
 - [ ] Write: 1 mistake bạn đã làm và lesson learned
@@ -788,6 +815,7 @@ Amdahl nói:
 - [ ] Document: Week 1 reflection (500 words)
 
 ### Mentor Questions (Answer these)
+
 - [ ] Q1: Nếu bạn phải scale từ 1K QPS lên 100K QPS, bạn sẽ làm gì? (viết 5 steps)
 - [ ] Q2: System có 99.9% availability nhưng vẫn bị complain về downtime. Tại sao? (viết analysis)
 - [ ] Q3: Làm sao bạn identify bottleneck trong production system? (viết process)
@@ -812,4 +840,5 @@ Amdahl nói:
 
 ---
 
-> **Mentor Final Check**: Nếu bạn check tất cả items trên, bạn đã sẵn sàng cho Week 2. Nếu không, bạn chưa sẵn sàng. Hãy honest với bản thân.
+> **Mentor Final Check**: Nếu bạn check tất cả items trên, bạn đã sẵn sàng cho Week 2. Nếu không, bạn chưa sẵn sàng. Hãy
+> honest với bản thân.
