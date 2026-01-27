@@ -560,27 +560,118 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
 - [ ] Tính toán downtime cho: 99%, 99.9%, 99.99%, 99.999% (theo năm, tháng, tuần, ngày)
   - Downtime = (1 − Availability) × Tổng thời gian
 - [ ] Viết bảng so sánh: Availability % → Downtime/year → Downtime/month
+| Availability | Downtime/year | Downtime/month | Downtime/week | Downtime/day |
+|--------------|----------------|----------------|----------------|---------------|
+| 99%          | 3.65 days      | 7.2 hours      | 1.68 hours     | 14.4 minutes  |
+| 99.9%        | 8.76 hours     | 43.2 minutes   | 10.08 minutes | 1.44 minutes  |
+| 99.99%       | 52.56 minutes  | 4.32 minutes   | 1.008 minutes | 8.64 seconds  |
+| 99.999%      | 5.256 minutes  | 25.92 seconds  | 6.048 seconds | 0.864 seconds |
+
 - [ ] Đọc về "nines" trong availability (3 nines, 4 nines, 5 nines)
+  - Nines = số chữ số 9 trong availability %
+  - 3 nines = 99.9%
+  - 4 nines = 99.99%
+  - 5 nines = 99.999%
+  - Mỗi nines tăng thêm → Giảm downtime đáng kể
+
 - [ ] Định nghĩa: Single Point of Failure (SPOF)
+  - SPOF = Thành phần hệ thống mà nếu nó hỏng → toàn bộ hệ thống ngừng hoạt động
+  - Ví dụ: 1 database server không có replica → nếu nó hỏng → hệ thống không hoạt động
 - [ ] Định nghĩa: Mean Time Between Failures (MTBF)
+  - MTBF = Thời gian trung bình giữa các lần hỏng hóc
+  - Ví dụ: Nếu MTBF = 1000 giờ → Trung bình mỗi 1000 giờ sẽ có 1 lần hỏng
 - [ ] Định nghĩa: Mean Time To Recovery (MTTR)
+  - MTTR = Thời gian trung bình để khôi phục sau khi hỏng
+  - Ví dụ: Nếu MTTR = 2 giờ → Trung bình mất 2 giờ để sửa chữa và khôi phục
 - [ ] Công thức: Availability = MTBF / (MTBF + MTTR) - verify và hiểu
+    - Availability = MTBF / (MTBF + MTTR)
+    - Ví dụ: MTBF = 1000 giờ, MTTR = 2 giờ
+        - Availability = 1000 / (1000 + 2) ≈ 99.8%
 
 ### Redundancy Patterns
 
 - [ ] Đọc về Active-Active redundancy pattern
+  - Active-Active: Tất cả các nodes đều hoạt động và xử lý traffic cùng lúc. Nếu một node hỏng, các node còn lại tiếp tục phục vụ mà không gián đoạn.
 - [ ] Đọc về Active-Passive (Hot Standby) redundancy pattern
+  - Active-Passive: Một node chính (active) xử lý traffic, trong khi node phụ (passive) ở trạng thái chờ. Nếu node chính hỏng, node phụ sẽ được kích hoạt để tiếp quản.
 - [ ] Đọc về Active-Passive (Cold Standby) redundancy pattern
+  - Active-Passive (Cold Standby): Node phụ không hoạt động và không sẵn sàng ngay lập tức. Khi node chính hỏng, node phụ cần thời gian để khởi động và tiếp quản.
 - [ ] So sánh: Active-Active vs Active-Passive (3 điểm khác biệt)
+  - 1️⃣ Hiệu suất & Tài nguyên 
+    - Active-Active: Tất cả node đều xử lý request → tận dụng tối đa tài nguyên. 
+    - Active-Passive: Chỉ node chính hoạt động → node phụ gần như “để không”.
+  - 2️⃣ Thời gian Failover (Chuyển đổi khi lỗi)
+    - Active-Active: Gần như không gián đoạn (vì node khác đang chạy sẵn). 
+    - Active-Passive: Phải chờ chuyển sang node phụ → có downtime ngắn. 
+  - 3️⃣ Độ phức tạp & Chi phí
+    - Active-Active:
+    → Phức tạp hơn (sync data, conflict)
+    → Chi phí cao hơn.
+
+    - Active-Passive:
+    → Dễ quản lý
+    → Chi phí thấp hơn.
+
+  - 📌 Bản rút gọn để học thuộc 
+    - Nếu cần nhớ nhanh trong phỏng vấn/thi:
+      - Active-Active: Nhanh – Tốn tiền – Phức tạp 
+      - Active-Passive: Rẻ – Dễ – Chậm hơn khi fail
 - [ ] Tìm 2 real-world examples của Active-Active
+  - 1. Hệ thống DNS toàn cầu (ví dụ: Google Public DNS)
+    - Nhiều server DNS hoạt động đồng thời trên toàn thế giới để xử lý các truy vấn DNS. Nếu một server gặp sự cố, các server khác vẫn tiếp tục phục vụ người dùng mà không gián đoạn.
+  - 2. Hệ thống cân bằng tải web (Load Balancer)
+    - Nhiều máy chủ web hoạt động song song để xử lý các yêu cầu từ người dùng. Nếu một máy chủ gặp sự cố, các máy chủ còn lại vẫn tiếp tục phục vụ mà không ảnh hưởng đến trải nghiệm người dùng.
 - [ ] Tìm 2 real-world examples của Active-Passive
+  - 1. Hệ thống cơ sở dữ liệu với replica
+    - Một cơ sở dữ liệu chính (primary) xử lý tất cả các giao dịch, trong khi một bản sao (replica) ở trạng thái chờ. Nếu cơ sở dữ liệu chính gặp sự cố, bản sao sẽ được kích hoạt để tiếp quản.
+    - Ví dụ: MySQL Master-Slave Replication. 
+  - 2. Hệ thống máy chủ ứng dụng với máy chủ dự phòng
+    - Một máy chủ ứng dụng chính xử lý tất cả các yêu cầu từ người dùng, trong khi một máy chủ dự phòng ở trạng thái chờ. Nếu máy chủ chính gặp sự cố, máy chủ dự phòng sẽ được kích hoạt để tiếp quản.
+    - Ví dụ: Hệ thống web sử dụng Nginx với một máy chủ dự phòng.
 
 ### Bottleneck Identification
 
 - [ ] Liệt kê 4 loại bottlenecks chính: CPU, Memory, I/O, Network
+  - CPU Bottleneck: Khi CPU đạt 100% sử dụng, không thể xử lý thêm yêu cầu.
+  - Memory Bottleneck: Khi hệ thống hết RAM, dẫn đến việc sử dụng swap hoặc crash.
+  - I/O Bottleneck: Khi tốc độ đọc/ghi đĩa chậm, làm chậm toàn bộ hệ thống.
+  - Network Bottleneck: Khi băng thông thấp hoặc latency cao → request timeout, service giao tiếp chậm.
 - [ ] Với mỗi bottleneck, viết 2 cách identify
+  - CPU Bottleneck:
+    1. Sử dụng công cụ giám sát hệ thống (như top, htop) để kiểm tra mức sử dụng CPU.
+    2. Phân tích logs để tìm các request có thời gian xử lý lâu, có thể do CPU quá tải.
+  3. Memory Bottleneck:
+    1. Kiểm tra mức sử dụng RAM bằng công cụ giám sát hệ thống (như free, vmstat).
+    2. Quan sát các lỗi liên quan đến OutOfMemory hoặc swap usage trong logs.
+  3. I/O Bottleneck:
+    1. Sử dụng công cụ như iostat để kiểm tra tốc độ đọc/ghi đĩa và thời gian chờ I/O.
+    2. Phân tích logs để tìm các request có thời gian xử lý lâu liên quan đến I/O.
+  4. Network Bottleneck:
+    1. Sử dụng công cụ như iftop hoặc nload để giám sát băng thông mạng.
+    2. Kiểm tra logs để tìm các lỗi timeout hoặc độ trễ cao trong giao tiếp giữa các dịch vụ.
 - [ ] Với mỗi bottleneck, viết 2 cách resolve
+  - CPU Bottleneck:
+    1. Tối ưu hóa code để giảm tải CPU (ví dụ: giảm độ phức tạp thuật toán).
+    2. Thêm nhiều instance của service để phân phối tải (horizontal scaling).
+  3. Memory Bottleneck:
+    1. Tối ưu hóa việc sử dụng bộ nhớ trong ứng dụng (ví dụ: giảm memory leaks).
+    2. Nâng cấp phần cứng hoặc thêm swap space.
+  3. I/O Bottleneck:
+    1. Sử dụng caching để giảm số lần truy cập đĩa.
+    2. Nâng cấp phần cứng lưu trữ (ví dụ: sử dụng SSD thay vì HDD).
+  3. Network Bottleneck:
+    1. Tối ưu hóa giao tiếp mạng (ví dụ: giảm kích thước payload).
+    2. Sử dụng CDN hoặc edge servers để giảm tải mạng.
 - [ ] Đọc về "Amdahl's Law" trong context của bottlenecks
+  - Amdahl's Law: Tốc độ tối đa của hệ thống khi cải thiện một phần phụ thuộc vào tỷ lệ phần đó trong tổng thời gian xử lý.
+  - Công thức: Speedup = 1 / (S + P/N)
+    - S = Phần serial (không thể parallel)
+    - P = Phần parallel (có thể parallel)
+    - N = Số lượng đơn vị xử lý (cores, servers)
+    - → Nếu phần serial lớn (bottleneck) → speedup bị giới hạn.
+    - → Cần giảm phần serial (bottleneck) để đạt speedup tốt hơn.
+    - Ví dụ: Nếu 30% thời gian là serial → max speedup = 1 / 0.3 ≈ 3.33x dù có bao nhiêu cores.
+    - → Giải pháp: Giảm phần serial (bottleneck) để cải thiện hiệu suất tổng thể.
 
 ### Capacity Planning
 
