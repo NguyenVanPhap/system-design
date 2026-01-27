@@ -516,17 +516,49 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
 
 ### Performance Metrics
 
-- [ ] Định nghĩa chính xác: Latency, Throughput, QPS, TPS, RPS
+- [ ] Định nghĩa chính xác: Latency, Throughput, QPS, TPS, RPS 
+  - Latency = thời gian một request/operation bắt đầu cho đến khi hoàn thành 
+  - Throughput = số lượng operation mà hệ thống xử lý thành công trên một đơn vị thời gian 
+  - QPS = Queries per second = Số lượng query mà hệ thống xử lý trong một giây 
+  - RPS = Requests per second = Số lượng request mà hệ thống nhận/xử lý trong một giây 
+  - TPS = Transactions per second = Số lượng transaction hoàn chỉnh (atomic, commit thành công) mà hệ thống xử lý trong 1 giây
 - [ ] Viết công thức tính: QPS = ?
-- [ ] Viết công thức tính: Throughput = ?
+  - QPS = number of queries / total time
+- [ ] Viết công thức tính: Throughput = số lượng operation hoàn thành / thời gian
 - [ ] Đọc về percentile metrics (p50, p95, p99, p999)
+  - Percentile = “bao nhiêu % request nhanh hơn hoặc bằng giá trị này”
 - [ ] Tính toán: Nếu p95 latency = 200ms, có nghĩa là gì? (viết câu trả lời)
+  - 95% request có thời gian phản hồi ≤ 200ms, 
+  - 5% request còn lại > 200ms.
 - [ ] Tìm hiểu: Tại sao p99 quan trọng hơn average latency?
+  - Average che giấu vấn đề.
+  - p99 phản ánh user xui xẻo nhất 
+    - p99 = latency của 1% user chậm nhất. 
+  - Nó trả lời câu hỏi:
+    - “User tệ nhất đang trải nghiệm thế nào?” 
+  - Với hệ thống lớn:
+    - 1% của 1 triệu user = 10.000 người 😱 
+  - → Không thể bỏ qua.
 - [ ] Đọc về "tail latency" và "latency SLOs"
+  - Tail = những request rất chậm. 
+  - Ví dụ:
+    - 95% < 200ms 
+    - 5% > 1s 
+    - 1% > 5s 
+    - → Đó là tail latency.
+  - SLO = Service Level Objective 
+    - Mục tiêu chất lượng dịch vụ. 
+    - Ví dụ: 99% request phải < 300ms trong 30 ngày. 
+    - Hoặc: p99 latency ≤ 500ms.
+      | Khái niệm | Ai dùng                |
+      | --------- | ---------------------- |
+      | SLO       | Internal (team tự đặt) |
+      | SLA       | Cam kết với khách      |
 
 ### Availability Concepts
 
 - [ ] Tính toán downtime cho: 99%, 99.9%, 99.99%, 99.999% (theo năm, tháng, tuần, ngày)
+  - Downtime = (1 − Availability) × Tổng thời gian
 - [ ] Viết bảng so sánh: Availability % → Downtime/year → Downtime/month
 - [ ] Đọc về "nines" trong availability (3 nines, 4 nines, 5 nines)
 - [ ] Định nghĩa: Single Point of Failure (SPOF)
