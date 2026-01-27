@@ -640,26 +640,27 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
   - CPU Bottleneck:
     1. Sử dụng công cụ giám sát hệ thống (như top, htop) để kiểm tra mức sử dụng CPU.
     2. Phân tích logs để tìm các request có thời gian xử lý lâu, có thể do CPU quá tải.
-  3. Memory Bottleneck:
+  - Memory Bottleneck:
     1. Kiểm tra mức sử dụng RAM bằng công cụ giám sát hệ thống (như free, vmstat).
     2. Quan sát các lỗi liên quan đến OutOfMemory hoặc swap usage trong logs.
-  3. I/O Bottleneck:
+  - I/O Bottleneck:
     1. Sử dụng công cụ như iostat để kiểm tra tốc độ đọc/ghi đĩa và thời gian chờ I/O.
     2. Phân tích logs để tìm các request có thời gian xử lý lâu liên quan đến I/O.
-  4. Network Bottleneck:
+  - Network Bottleneck:
     1. Sử dụng công cụ như iftop hoặc nload để giám sát băng thông mạng.
     2. Kiểm tra logs để tìm các lỗi timeout hoặc độ trễ cao trong giao tiếp giữa các dịch vụ.
+  
 - [ ] Với mỗi bottleneck, viết 2 cách resolve
   - CPU Bottleneck:
     1. Tối ưu hóa code để giảm tải CPU (ví dụ: giảm độ phức tạp thuật toán).
     2. Thêm nhiều instance của service để phân phối tải (horizontal scaling).
-  3. Memory Bottleneck:
+  - Memory Bottleneck:
     1. Tối ưu hóa việc sử dụng bộ nhớ trong ứng dụng (ví dụ: giảm memory leaks).
     2. Nâng cấp phần cứng hoặc thêm swap space.
-  3. I/O Bottleneck:
+  - I/O Bottleneck:
     1. Sử dụng caching để giảm số lần truy cập đĩa.
     2. Nâng cấp phần cứng lưu trữ (ví dụ: sử dụng SSD thay vì HDD).
-  3. Network Bottleneck:
+  - Network Bottleneck:
     1. Tối ưu hóa giao tiếp mạng (ví dụ: giảm kích thước payload).
     2. Sử dụng CDN hoặc edge servers để giảm tải mạng.
 - [ ] Đọc về "Amdahl's Law" trong context của bottlenecks
@@ -676,11 +677,78 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
 ### Capacity Planning
 
 - [ ] Đọc về "back-of-envelope calculations"
+  - Back-of-envelope calculations = Ước lượng nhanh, sơ bộ để có cái nhìn tổng quan về yêu cầu hệ thống.
+  - Không cần chính xác tuyệt đối, chỉ cần đủ gần để đưa ra quyết định ban đầu.
+  - Ví dụ: Ước lượng số lượng server cần thiết dựa trên QPS và khả năng xử lý của mỗi server.
+  - Giúp nhanh chóng đánh giá tính khả thi của thiết kế hệ thống.
+  - Thường dùng trong giai đoạn early design để tránh over-engineering hoặc under-provisioning.
+  - Ví dụ: Nếu mỗi server xử lý được 100 QPS và cần phục vụ 10,000 QPS → Cần ít nhất 100 servers (10,000 / 100).
+  - Giúp xác định các yêu cầu về tài nguyên như CPU, RAM, Storage, Bandwidth.
+  - Cần kết hợp với các yếu tố khác như redundancy, peak load, growth rate để có kế hoạch chính xác hơn.
 - [ ] Học cách estimate: Storage requirements
+  - Estimate storage = Số lượng users × Data per user
+  - Cân nhắc growth rate (dự kiến tăng bao nhiêu data theo thời gian)
+  - Thêm buffer (dự phòng) cho unexpected growth
+  - Xem xét loại data (structured, unstructured) để chọn storage phù hợp
+  - Tính toán backup storage nếu cần
+  - Xem xét retention policy (lưu trữ bao lâu)
+  - Tính toán tổng storage cần thiết = Current data + Growth + Buffer + Backup
+  - Ví dụ: 1M users × 10MB/user = 10TB + growth + buffer
+  - Chọn storage type (HDD, SSD, Cloud storage) dựa trên performance và cost
+  - Lập kế hoạch mở rộng storage khi cần thiết
+  - Đánh giá cost liên quan đến storage (per GB/month)
+  - Xem xét data compression để giảm storage usage
+  - Tính toán IOPS requirements nếu cần cho performance
+  - Xem xét data access patterns (read-heavy, write-heavy) để chọn storage phù hợp
 - [ ] Học cách estimate: Bandwidth requirements
+  - Estimate bandwidth = QPS × Average response size
+  - Cân nhắc peak load (gấp bao nhiêu lần so với average)
+  - Thêm buffer (dự phòng) cho unexpected spikes
+  - Xem xét loại traffic (inbound, outbound)
+  - Tính toán tổng bandwidth cần thiết = Average bandwidth + Peak load + Buffer
+  - Ví dụ: 10K QPS × 2KB = 20MB/s + peak + buffer
+  - Chọn network type (dedicated, shared, cloud) dựa trên performance và cost
+  - Lập kế hoạch mở rộng bandwidth khi cần thiết
+  - Đánh giá cost liên quan đến bandwidth (per GB/month)
+  - Xem xét data transfer patterns (bursty, steady) để chọn network phù hợp
+  - Tính toán latency requirements nếu cần cho performance
 - [ ] Học cách estimate: Compute requirements
+  - Estimate compute = QPS / Requests per CPU core
+  - Cân nhắc peak load (gấp bao nhiêu lần so với average)
+  - Thêm buffer (dự phòng) cho unexpected spikes
+  - Tính toán tổng compute cần thiết = Average compute + Peak load + Buffer
+  - Ví dụ: 10K QPS / 100 RPS/core = 100 cores + peak + buffer
+  - Chọn instance type (CPU, RAM) dựa trên performance và cost
+  - Lập kế hoạch mở rộng compute khi cần thiết
+  - Đánh giá cost liên quan đến compute (per hour)
+  - Xem xét auto-scaling để tối ưu chi phí
+  - Tính toán power và cooling requirements nếu cần cho data center
+  - Xem xét workload type (CPU-bound, I/O-bound) để chọn instance phù hợp
+  - Tính toán redundancy requirements (n+1, n+2) nếu cần cho availability
+  - Xem xét virtualization/containerization để tối ưu resource usage
+  - Tính toán licensing costs nếu dùng phần mềm có phí
 - [ ] Practice: Estimate storage cho 1M users, mỗi user 10MB data
+  - Step 1: 1M users × 10MB/user = 10TB
+  - Step 2: Growth rate = 10%/month → 1TB/month
+  - Step 3: Buffer = 20% of current = 2TB
+  - Step 4: Backup storage = 50% of current = 5TB
+  - Total storage = 10TB + 1TB/month + 2TB + 5TB = 18TB + growth
+  - Chọn storage type: SSD cho performance tốt
+  - Estimate cost: $0.10/GB/month → 18TB = $1,800/month
+  - Plan for expansion: Monitor usage, add storage khi cần
+  - Document calculations trong spreadsheet
+  - Verify numbers có hợp lý không?
+  
 - [ ] Practice: Estimate bandwidth cho 10K QPS, mỗi request 2KB response
+  - Step 1: 10K QPS × 2KB = 20MB/s
+  - Step 2: Peak load = 5x average = 100MB/s
+  - Step 3: Buffer = 20% of peak = 20MB/s
+  - Total bandwidth = 20MB/s + 100MB/s + 20MB/s = 140MB/s
+  - Chọn network type: Dedicated connection
+  - Estimate cost: $0.05/GB/month → 140MB/s ≈ 360TB/month = $18,000/month
+  - Plan for expansion: Monitor usage, upgrade bandwidth khi cần
+  - Document calculations trong spreadsheet
+  - Verify numbers có hợp lý không?
 
 ---
 
