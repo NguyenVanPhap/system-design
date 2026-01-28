@@ -692,6 +692,7 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
   - Xem xét loại data (structured, unstructured) để chọn storage phù hợp
   - Tính toán backup storage nếu cần
   - Xem xét retention policy (lưu trữ bao lâu)
+  - 
   - Tính toán tổng storage cần thiết = Current data + Growth + Buffer + Backup
   - Ví dụ: 1M users × 10MB/user = 10TB + growth + buffer
   - Chọn storage type (HDD, SSD, Cloud storage) dựa trên performance và cost
@@ -700,6 +701,7 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
   - Xem xét data compression để giảm storage usage
   - Tính toán IOPS requirements nếu cần cho performance
   - Xem xét data access patterns (read-heavy, write-heavy) để chọn storage phù hợp
+  
 - [ ] Học cách estimate: Bandwidth requirements
   - Estimate bandwidth = QPS × Average response size
   - Cân nhắc peak load (gấp bao nhiêu lần so với average)
@@ -712,12 +714,14 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
   - Đánh giá cost liên quan đến bandwidth (per GB/month)
   - Xem xét data transfer patterns (bursty, steady) để chọn network phù hợp
   - Tính toán latency requirements nếu cần cho performance
+  
 - [ ] Học cách estimate: Compute requirements
   - Estimate compute = QPS / Requests per CPU core
   - Cân nhắc peak load (gấp bao nhiêu lần so với average)
   - Thêm buffer (dự phòng) cho unexpected spikes
   - Tính toán tổng compute cần thiết = Average compute + Peak load + Buffer
   - Ví dụ: 10K QPS / 100 RPS/core = 100 cores + peak + buffer
+  
   - Chọn instance type (CPU, RAM) dựa trên performance và cost
   - Lập kế hoạch mở rộng compute khi cần thiết
   - Đánh giá cost liên quan đến compute (per hour)
