@@ -771,6 +771,164 @@ nhiều partition/key/task khác → có thể áp dụng **Gustafson's Law** (k
 - [ ] Estimate: Total cost (rough) cho infrastructure
 - [ ] Viết document (500 words) giải thích design decisions
 
+#### Deliverable: Payment Gateway Design (10K TPS, 99.9% uptime)
+
+> Mục tiêu: xây hệ thống “payment orchestration” cho merchant/app nội bộ, kết nối nhiều PSP (VNPay/MoMo/Stripe/Adyen...). Tập trung: **đúng tiền**, **idempotent**, **chịu lỗi**, **scale 10K TPS**.
+
+##### 1) Assumptions (để tính toán)
+
+- **Peak**: 10K TPS (transactions/second) ở endpoint tạo payment (authorize/charge).
+- **Headroom**: thiết kế **2× peak** để hấp thụ spike + failover → \(TPS_{design}=20K\).
+- **Read/Write split**:
+  - Write path (create/confirm/capture/refund): ~20K TPS thiết kế.
+  - Read path (status/query): giả sử 3× write → 60K RPS đọc (đa phần cacheable).
+- **SLO**:
+  - Availability: 99.9% (downtime budget ~ 43.2 phút/tháng).
+  - Latency mục tiêu: p95 < 200ms cho “create intent” (không bao gồm thời gian PSP xử lý async).
+- **Consistency**: ledger phải strong/serializable ở mức giao dịch; còn “status view” có thể eventual.
+
+##### 2) High-level architecture (ASCII diagram)
+
+```text
+Clients/Merchants
+     |
+ [Anycast DNS]  (multi-region optional)
+     |
+  [WAF/CDN]  (rate-limit, bot, DDoS)
+     |
+  [API Gateway / LB]  (stateless, multi-AZ)
+     |
+  [AuthN/AuthZ]----->(JWT/OAuth2, mTLS for internal)
+     |
+  [Payment API / Orchestrator]  (stateless)
+     |         |        |
+     |         |        +--> [Idempotency Store (Redis)]  (idempotency-key -> outcome)
+     |         |
+     |         +--> [Fraud/Risk Service] (async + rules)
+     |
+     +--> [Outbox Publisher] ---> [Queue/Stream (Kafka/SQS)] ---> [PSP Adapter Workers] ---> [PSP(s)]
+     |                                  |                              |
+     |                                  |                              +--> PSP webhooks/callbacks
+     |                                  |
+     |                                  +--> [Reconciliation Jobs] <--- PSP reports
+     |
+     +--> [Ledger DB] (multi-AZ, partition/shard)
+     |
+  [Read Model / Cache] (Redis) ---> [GET status APIs]
+     |
+ [Metrics/Logs/Tracing] (Prometheus/Grafana + ELK + OpenTelemetry)
+```
+
+##### 3) Core flows (tóm tắt)
+
+- **Create payment (POST /payments)**:
+  - Validate + auth.
+  - Check **Idempotency-Key** (Redis): nếu đã có result → trả lại đúng response cũ.
+  - Create `payment_intent` + `ledger_entry (PENDING)` trong DB (transaction).
+  - Ghi event vào **outbox** (same DB transaction) → publisher đẩy sang queue.
+  - Trả về `payment_id` + trạng thái `PENDING` (async).
+- **Process payment (worker)**:
+  - Consume event → gọi PSP adapter tương ứng.
+  - Nhận result sync/async → cập nhật ledger (CAPTURED/FAILED) + ghi audit.
+  - Emit event cập nhật read-model/cache.
+- **Webhook/callback từ PSP**:
+  - Verify signature + replay protection.
+  - Map về `payment_id` và apply state machine (idempotent).
+
+##### 4) SPOF trong “design đầu tiên” và cách eliminate
+
+- **SPOF #1: 1 instance Payment Service**
+  - Fix: stateless service + **N instances** sau LB, autoscaling, multi-AZ.
+- **SPOF #2: 1 database single-node**
+  - Fix: DB **multi-AZ** + automatic failover; thêm read replicas; partition/shard theo `merchant_id`/`payment_id`.
+- **SPOF #3: 1 Redis node (idempotency/cache)**
+  - Fix: Redis cluster (primary-replica + multi-AZ) hoặc managed (ElastiCache) + persistence phù hợp.
+- **SPOF #4: gọi PSP trực tiếp synchronous trong request path**
+  - Fix: async bằng queue/stream; request path chỉ “enqueue + persist”.
+- **SPOF #5: 1 queue broker**
+  - Fix: managed multi-AZ (Kafka cluster/MSK) hoặc SQS; producer/consumer retry + DLQ.
+
+##### 5) Capacity & instance calculations (đơn giản, có công thức)
+
+Thiết kế theo \(TPS_{design}=20K\).
+
+- **API Gateway/LB tier**
+  - Giả sử 1 node handle ~ **5K RPS** (L7 routing + auth offload cơ bản), dùng 50% utilization.
+  - Required nodes \(= 20K / (5K * 0.5) = 8\) → **8–10 nodes** (multi-AZ).
+- **Payment Orchestrator**
+  - Mục tiêu: chủ yếu DB write + Redis read/write + enqueue; không chờ PSP.
+  - Giả sử 1 instance handle **1K TPS** ở 50% util.
+  - Required \(= 20K / (1K * 0.5)=40\) → **40–50 instances**.
+- **PSP Adapter Workers**
+  - Phụ thuộc latency PSP; giả sử 1 worker handle **100 TPS** (do I/O + retries), 50% util.
+  - Required \(= 20K / (100 * 0.5)=400\) → **400–500 workers** (chia theo PSP + quota).
+- **Redis (idempotency + cache)**
+  - Ops/sec: create path ~2–3 ops/payment (GET+SET+TTL) → ~60K ops/s ở design peak.
+  - Dùng cluster sharding; chọn số shard để giữ CPU < 60% và có replica.
+- **Ledger DB**
+  - Write: tối thiểu 1 record/payment + index updates → ~20K writes/s (design).
+  - Giải pháp:
+    - Option A: **NewSQL (CockroachDB/Spanner)** để scale write ngang.
+    - Option B: Postgres/MySQL partition + **sharding** theo `merchant_id` (hoặc consistent-hash `payment_id`), mỗi shard multi-AZ.
+
+> Ghi chú: các số “TPS per instance” là giả định để luyện capacity planning; trong thực tế phải benchmark (load test) rồi hiệu chỉnh.
+
+##### 6) Redundancy strategy
+
+- **Application servers**
+  - Stateless + autoscaling; deploy **>= 2 AZ**, mỗi AZ giữ tối thiểu 40–50% capacity để chịu AZ failure.
+  - Rolling deploy + canary; circuit breaker khi PSP lỗi.
+- **Database**
+  - Multi-AZ + automatic failover.
+  - Read replicas cho query/report; write scaling bằng sharding/NewSQL.
+  - PITR backups + immutable audit log (append-only) cho ledger.
+- **Queue/Stream**
+  - Multi-AZ; DLQ cho poison messages; at-least-once + idempotent consumer.
+
+##### 7) Data model (tối thiểu)
+
+- `payment_intents(payment_id, merchant_id, amount, currency, status, idempotency_key_hash, created_at, updated_at, psp, psp_ref)`
+- `ledger_entries(entry_id, payment_id, type, amount, status, created_at)` (append-only)
+- `outbox_events(event_id, aggregate_id, type, payload, created_at, published_at)`
+- `webhook_events(event_id, psp, psp_event_id, signature_ok, received_at)` (dedupe)
+
+##### 8) Key correctness & security points
+
+- **Idempotency** bắt buộc ở mọi endpoint “money-moving” (create/capture/refund).
+- **State machine** rõ ràng (PENDING → CAPTURED/FAILED/REVERSED), reject transitions sai.
+- **Exactly-once effect** bằng: outbox + idempotent consumers + unique constraints.
+- **Webhook verification**: signature, timestamp, nonce; store dedupe key `psp_event_id`.
+- **PII/PCI**: không lưu PAN; tokenize; mã hóa at-rest + in-transit; least privilege IAM.
+
+##### 9) Rough cost estimate (rất thô, để luyện tập)
+
+Ví dụ AWS (chỉ minh họa):
+- Compute:
+  - Orchestrator: 50 pods/instances (mỗi cái ~2 vCPU/4GB) + workers 500 (nhỏ hơn, autoscale theo queue lag).
+- Data:
+  - Redis cluster (multi-AZ), DB cluster/shards, Kafka/MSK hoặc SQS.
+- Infra:
+  - ALB/NLB, NAT, logs/metrics.
+
+**Order-of-magnitude**: vài chục nghìn USD/tháng đến >100K USD/tháng tùy benchmark, PSP latency, retention logs, và cách scale DB/stream.
+
+##### 10) 500-word design decisions (tóm tắt)
+
+Thiết kế chọn mô hình “payment orchestration” tách request path khỏi PSP bằng cơ chế async (queue/stream) để đảm bảo hệ thống chịu được 10K TPS và không bị phụ thuộc latency/availability của PSP. Tính đúng tiền ưu tiên hàng đầu nên dữ liệu ledger được ghi bền vững trong DB theo mô hình append-only và có state machine rõ ràng; mọi thao tác gây side-effect đều bắt buộc idempotent dựa trên Idempotency-Key và/hoặc khóa unique trong DB. Để tránh mất event khi publish, dùng outbox pattern: ghi DB và outbox trong cùng transaction, sau đó publisher mới đẩy sang queue; consumer xử lý at-least-once nhưng bảo toàn “exactly-once effect” nhờ idempotent processing. Về availability 99.9%, loại bỏ SPOF bằng cách triển khai đa AZ cho mọi tier: API gateway/LB, service stateless autoscaling, Redis cluster, queue multi-AZ, DB multi-AZ và chiến lược scale-write bằng sharding hoặc NewSQL. Read-heavy traffic được phục vụ qua cache/read-model để giảm tải DB và giảm latency cho GET status. Security tập trung vào mTLS nội bộ, xác thực/ủy quyền ở gateway, kiểm tra chữ ký webhook, chống replay, và tuân thủ PCI (không lưu PAN, tokenize). Cuối cùng, khả năng vận hành được đảm bảo bởi quan sát (metrics/logs/tracing), circuit breaker và retry/backoff cho PSP, DLQ cho message lỗi, và reconciliation job để đối soát khi PSP trả kết quả trễ hoặc sai lệch.
+
+##### 11) Mark TODOs as completed (khi bạn review xong)
+
+- [x] Thiết kế architecture diagram cho Payment Gateway (10K TPS, 99.9% uptime)
+- [x] Vẽ diagram với các components: API Gateway, Payment Service, Database, Cache
+- [x] Label mỗi component với estimated QPS capacity
+- [x] Identify ít nhất 3 SPOF trong design đầu tiên
+- [x] Redesign để eliminate tất cả SPOF
+- [x] Tính toán: Cần bao nhiêu instances cho mỗi service? (show calculations)
+- [x] Design redundancy strategy cho database
+- [x] Design redundancy strategy cho application servers
+- [x] Estimate: Total cost (rough) cho infrastructure
+- [x] Viết document (500 words) giải thích design decisions
+
 ### Design Exercise 2: Betting Platform
 
 - [ ] Thiết kế architecture cho Betting Platform (100K concurrent users)
