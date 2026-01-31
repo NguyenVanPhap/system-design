@@ -932,28 +932,51 @@ Thiết kế chọn mô hình “payment orchestration” tách request path kh�
 ### Design Exercise 2: Betting Platform
 
 - [ ] Thiết kế architecture cho Betting Platform (100K concurrent users)
+  **Components:** Load Balancer → API Gateway → Betting Service (stateless, N instances) → Cache (Redis cluster) → Database (Primary + Read Replicas). Message Queue cho settlement async.
+  **100K concurrent users:** Giả sử 10% active (place bet/query) → 10K RPS. Mỗi instance 2K RPS → cần ≥5 app instances. DB: write ~2K TPS (place bet), read ~8K QPS (odds, history) → read replicas.
 - [ ] Identify bottleneck trong design (CPU, Memory, I/O, Network - chọn 1)
+  **Chọn: I/O (Database).** Lý do: Write path (place bet) phải ghi DB + validate odds + update balance → nhiều query/transaction. Read path (odds, live score) rất high QPS. DB dễ thành bottleneck trước CPU/Memory của app.
 - [ ] Design solution để resolve bottleneck đó
+  **Giải pháp:** (1) Read replicas cho read-heavy (odds, history). (2) Cache layer (Redis) cho odds, hot matches. (3) Write: connection pooling, batch nếu có thể. (4) Partition/shard theo match_id hoặc user_id nếu 1 DB không đủ.
 - [ ] Tính toán: Peak traffic = 10x normal, design để handle
+  **Normal:** 10K RPS. **Peak:** 100K RPS. **Design:** Auto-scaling app (min 5, max 50 instances). DB: đủ read replicas (10–20) + cache hit rate cao (80%+). Queue cho settlement để tách burst write khỏi real-time bet.
 - [ ] Design horizontal scaling strategy
+  **Strategy:** Stateless app servers; scale out theo CPU/RPS. Load balancer (L7). Database: thêm read replicas; khi write bottleneck → shard (e.g. by match_id). Cache: Redis cluster. Queue: Kafka/RabbitMQ partition theo match hoặc user.
 - [ ] Design vertical scaling strategy (nếu cần)
+  **Khi nào dùng:** DB primary có thể scale vertical trước khi shard (nhiều CPU/RAM cho connection và query). Cache node có thể tăng memory. **Giới hạn:** Vertical có ceiling (max instance size) → dài hạn vẫn cần horizontal (replica, shard).
 - [ ] So sánh: Horizontal vs Vertical cho use case này (viết 3 điểm)
+  1. **Burst traffic (World Cup, big match):** Horizontal phù hợp hơn (thêm app + replica), vertical không đủ nhanh và có limit.  
+  2. **Cost:** Vertical đơn giản, rẻ lúc nhỏ; horizontal tốn thêm LB, ops, nhưng scale được xa hơn.  
+  3. **Bottleneck DB:** Vertical cho primary có thể kéo dài thời gian trước khi phải shard; horizontal (replica, shard) là hướng tất yếu khi data và QPS lớn.
 - [ ] Estimate: Latency cho mỗi component (p50, p95, p99)
+  **API Gateway:** p50 2ms, p95 10ms, p99 25ms. **App (Betting Service):** p50 5ms, p95 30ms, p99 80ms. **Cache (Redis):** p50 1ms, p95 3ms, p99 8ms. **DB (read):** p50 5ms, p95 20ms, p99 50ms. **DB (write):** p50 10ms, p95 40ms, p99 100ms. **End-to-end place bet:** p50 ~25ms, p95 ~100ms, p99 ~250ms.
 - [ ] Identify: Component nào sẽ là bottleneck? Tại sao?
+  **Database (write path).** Lý do: Mỗi bet = transaction (insert bet, update balance, validate odds). Write TPS có giới hạn (disk, lock). Read có thể scale bằng replica + cache; write khó scale hơn → dễ bottleneck nhất.
 - [ ] Viết document (500 words) về scaling strategy
+  *(Template – điền số liệu thực tế của bạn.)*
+  **1. Mục tiêu:** 100K concurrent users, peak 10x normal. **2. App tier:** Stateless, horizontal scaling (min/max instances), metric: CPU hoặc RPS. **3. Data tier:** Primary + N read replicas; cache (Redis) cho odds và hot data; queue cho settlement. **4. Bottleneck:** DB write → giảm write path (batch, async settlement), tăng read path (replica, cache). **5. Peak:** Auto-scale + cache warming + đủ replica; test load 100K RPS. **6. Trade-off:** Consistency (read-your-writes) vs scale (replica lag) – chọn strategy rõ ràng (e.g. sticky session cho critical read sau write).
 
 ### Design Exercise 3: Load Estimation
 
 - [ ] Scenario: E-commerce site, 1M daily active users
 - [ ] Estimate: Peak QPS (assume 20% traffic trong 1 hour)
+  **1M DAU, 20% trong 1h → 200K users trong 1h.** Giả sử mỗi user 5 requests trong giờ peak → 200K × 5 = 1M requests / 3600s ≈ **278 QPS**. Nếu peak hơn (e.g. 30% trong 30 phút): 300K × 5 / 1800 ≈ **833 QPS**. *Ghi lại assumption của bạn.*
 - [ ] Estimate: Average request size (assume 5KB)
+  **5KB** (header + body). Có thể điều chỉnh theo API thực tế (e.g. upload lớn hơn).
 - [ ] Estimate: Average response size (assume 10KB)
+  **10KB** (JSON product list, HTML snippet). Có thể tách API nhẹ (metadata) vs nặng (full page).
 - [ ] Calculate: Total bandwidth requirement (Mbps)
+  **Ingress:** 278 × 5KB ≈ 1.39 MB/s ≈ **11.1 Mbps**. **Egress:** 278 × 10KB ≈ 2.78 MB/s ≈ **22.2 Mbps**. Peak 833 QPS → ~33 Mbps ingress, ~67 Mbps egress. *Làm tròn theo nhà cung cấp (e.g. 50 Mbps, 100 Mbps).*
 - [ ] Estimate: Database size (assume 1GB per 10K users)
+  **1M users → 1GB × (1M/10K) = 100GB** (chỉ user/product metadata). Thêm orders, logs → có thể 300–500GB. *Ghi lại schema và growth rate.*
 - [ ] Calculate: Storage growth rate (per month)
+  Ví dụ: 100GB base + 10GB/tháng (orders, logs) → tháng 1: 110GB, tháng 12: 210GB. *Điền số theo dự đoán business.*
 - [ ] Estimate: Cache size needed (assume 20% of DB size)
+  **20% × 100GB = 20GB** cache (hot products, sessions). Redis 20GB + overhead ~25GB. *Có thể tăng % nếu read-heavy.*
 - [ ] Create spreadsheet với tất cả calculations
+  Cột: Metric, Formula, Value, Unit. Dòng: Peak QPS, Request size, Response size, Ingress Mbps, Egress Mbps, DB size, Growth/month, Cache size.
 - [ ] Verify: Tất cả numbers có hợp lý không? (write validation)
+  **Validation:** (1) QPS so với 1M DAU – 278–833 QPS hợp lý cho e-commerce. (2) Bandwidth – vài chục Mbps hợp lý cho 1 server/ vài server. (3) DB 100GB cho 1M users – hợp lý nếu không lưu blob lớn. (4) Cache 20% – có thể đo hit rate sau và tinh chỉnh.
 
 ---
 
@@ -961,74 +984,127 @@ Thiết kế chọn mô hình “payment orchestration” tách request path kh�
 
 ### Task 1: Spring Boot Performance App
 
-- [ ] Tạo Spring Boot project mới
-- [ ] Tạo REST API endpoint: `GET /api/users/{id}` (return mock user data)
-- [ ] Tạo REST API endpoint: `POST /api/users` (create user, save to in-memory list)
-- [ ] Add logging: Log request time cho mỗi endpoint
-- [ ] Add metrics: Count requests, measure latency
-- [ ] Run app và test với 100 requests (manual hoặc script)
-- [ ] Measure: Average latency, p95 latency
-- [ ] Document: Performance baseline
+- [ ] Tạo Spring Boot project mới  
+  `spring init --dependencies=web,actuator week1-perf-app`
+- [ ] Tạo REST API endpoint: `GET /api/users/{id}` (return mock user data)  
+  Return `User(id, name, email)` từ Map hoặc list in-memory.
+- [ ] Tạo REST API endpoint: `POST /api/users` (create user, save to in-memory list)  
+  Request body → validate → put vào `ConcurrentHashMap` hoặc list.
+- [ ] Add logging: Log request time cho mỗi endpoint  
+  Filter/Interceptor: `long start = now(); ... log("duration_ms", now()-start)`.
+- [ ] Add metrics: Count requests, measure latency  
+  Micrometer: `Counter.builder("requests.total").register(registry); Timer` cho duration.
+- [ ] Run app và test với 100 requests (manual hoặc script)  
+  curl loop hoặc script (bash/Python) gọi GET/POST, ghi thời gian.
+- [ ] Measure: Average latency, p95 latency  
+  Từ log hoặc từ `Timer` metrics (percentile).
+- [ ] Document: Performance baseline  
+  Ví dụ: GET p50=12ms, p95=45ms; POST p50=8ms, p95=30ms; QPS ~X với 1 thread.
 
 ### Task 2: Load Testing Setup
 
-- [ ] Install JMeter hoặc Gatling
-- [ ] Tạo test plan cho `/api/users/{id}` endpoint
-- [ ] Configure: 100 concurrent users, 1000 total requests
-- [ ] Run load test
-- [ ] Export results: QPS, latency (p50, p95, p99), error rate
-- [ ] Identify: At what load does latency spike?
-- [ ] Identify: At what load do errors start?
-- [ ] Document: Performance limits của app hiện tại
-- [ ] Tạo report với charts (response time, throughput)
+- [ ] Install JMeter hoặc Gatling  
+  JMeter: download; Gatling: sbt hoặc Maven.
+- [ ] Tạo test plan cho `/api/users/{id}` endpoint  
+  Thread group: N users, R ramp-up, loop M lần.
+- [ ] Configure: 100 concurrent users, 1000 total requests  
+  100 threads, 10 iterations hoặc 1000/100.
+- [ ] Run load test  
+  Chạy và đợi kết thúc, không có error nghiêm trọng.
+- [ ] Export results: QPS, latency (p50, p95, p99), error rate  
+  JMeter: Summary Report, Aggregate Report; Gatling: report HTML.
+- [ ] Identify: At what load does latency spike?  
+  Tăng dần threads (50, 100, 200, 500) → ghi lại khi p95 tăng vọt (e.g. > 2x).
+- [ ] Identify: At what load do errors start?  
+  Ghi lại first N (threads hoặc RPS) khi có 4xx/5xx hoặc timeouts.
+- [ ] Document: Performance limits của app hiện tại  
+  Ví dụ: Safe < 200 concurrent; latency spike at 300; errors from 500.
+- [ ] Tạo report với charts (response time, throughput)  
+  JMeter: Graphs; Gatling: mặc định có charts.
 
 ### Task 3: Performance Profiling
 
-- [ ] Install VisualVM hoặc JProfiler
-- [ ] Attach profiler to Spring Boot app
-- [ ] Run load test while profiling
-- [ ] Identify: Top 5 methods by CPU time
-- [ ] Identify: Memory allocation hotspots
-- [ ] Check: Memory leaks (heap growth over time)
-- [ ] Check: Thread contention
-- [ ] Document: 3 performance issues found
-- [ ] Propose: 3 optimizations (không cần implement, chỉ propose)
+- [ ] Install VisualVM hoặc JProfiler  
+  Download, cài đặt, biết cách attach vào JVM (PID hoặc remote).
+- [ ] Attach profiler to Spring Boot app  
+  Start app với JMX; VisualVM: connect → Sampler hoặc Profiler.
+- [ ] Run load test while profiling  
+  Vừa chạy JMeter/Gatling vừa profile (CPU, Memory).
+- [ ] Identify: Top 5 methods by CPU time  
+  Tab CPU: sort by self time hoặc total time, ghi tên method.
+- [ ] Identify: Memory allocation hotspots  
+  Tab Allocations hoặc Heap; xem class nào allocate nhiều.
+- [ ] Check: Memory leaks (heap growth over time)  
+  Heap dump 2–3 lần (cách nhau vài phút load) → so sánh; xem object nào tăng.
+- [ ] Check: Thread contention  
+  Tab Threads / Monitors; xem thread nào blocked nhiều.
+- [ ] Document: 3 performance issues found  
+  Ví dụ: (1) Method X chiếm 40% CPU, (2) Class Y allocate nhiều, (3) Lock Z contention.
+- [ ] Propose: 3 optimizations (không cần implement, chỉ propose)  
+  Ví dụ: cache kết quả X, giảm tạo object Y, thu hẹp lock scope Z.
 
 ### Task 4: Simple Load Balancer
 
-- [ ] Tạo Java class: `SimpleLoadBalancer`
-- [ ] Implement: Round-robin algorithm
-- [ ] Add: List of backend servers (hardcoded URLs)
-- [ ] Add: `getNextServer()` method
-- [ ] Add: Health check mechanism (ping endpoint)
-- [ ] Add: Skip unhealthy servers
-- [ ] Test: With 3 mock backend servers
-- [ ] Test: Mark one server unhealthy, verify it's skipped
-- [ ] Measure: Overhead của load balancer (latency added)
-- [ ] Document: Code và test results
+- [ ] Tạo Java class: `SimpleLoadBalancer`  
+  Field: `List<Backend> servers`, `AtomicInteger index` (round-robin).
+- [ ] Implement: Round-robin algorithm  
+  `getNextServer(): servers.get(index.getAndIncrement() % servers.size())`.
+- [ ] Add: List of backend servers (hardcoded URLs)  
+  Constructor nhận `List<String>` URLs.
+- [ ] Add: `getNextServer()` method  
+  Return URL (hoặc Backend object) theo round-robin.
+- [ ] Add: Health check mechanism (ping endpoint)  
+  Scheduled task: HTTP GET /health mỗi N giây; đánh dấu unhealthy nếu fail.
+- [ ] Add: Skip unhealthy servers  
+  Trong `getNextServer()` chỉ chọn server có `healthy == true`.
+- [ ] Test: With 3 mock backend servers  
+  Ứng dụng hoặc mock server (e.g. WireMock) trên 3 port.
+- [ ] Test: Mark one server unhealthy, verify it's skipped  
+  Tắt 1 server hoặc trả 5xx → gọi getNextServer nhiều lần, không trả server đó.
+- [ ] Measure: Overhead của load balancer (latency added)  
+  So sánh latency direct call vs qua LB (nên < 1–2ms).
+- [ ] Document: Code và test results  
+  Mô tả class, thuật toán, kết quả test và overhead.
 
 ### Task 5: Health Check Endpoints
 
-- [ ] Add endpoint: `GET /health` (basic health check)
-- [ ] Add endpoint: `GET /health/readiness` (readiness probe)
-- [ ] Add endpoint: `GET /health/liveness` (liveness probe)
-- [ ] Implement: Database connection check trong readiness
-- [ ] Implement: Memory check trong liveness (fail if memory > 90%)
-- [ ] Test: All health endpoints return correct status
-- [ ] Test: Simulate DB down, verify readiness fails
-- [ ] Test: Simulate high memory, verify liveness fails
-- [ ] Document: Khi nào dùng readiness vs liveness
+- [ ] Add endpoint: `GET /health` (basic health check)  
+  Spring Boot Actuator: `management.endpoint.health.probes.enabled=true` hoặc custom controller trả 200.
+- [ ] Add endpoint: `GET /health/readiness` (readiness probe)  
+  Actuator: `readiness`; hoặc custom: check DB connection, nếu fail trả 503.
+- [ ] Add endpoint: `GET /health/liveness` (liveness probe)  
+  Actuator: `liveness`; hoặc custom: process còn sống (có thể luôn 200).
+- [ ] Implement: Database connection check trong readiness  
+  `DataSource.getConnection()` hoặc query đơn giản (e.g. SELECT 1); fail → 503.
+- [ ] Implement: Memory check trong liveness (fail if memory > 90%)  
+  `Runtime.getRuntime().maxMemory()` và `totalMemory() - freeMemory()`; nếu used ratio > 0.9 → 503.
+- [ ] Test: All health endpoints return correct status  
+  Gọi từng endpoint khi app OK → 200; khi DB down → readiness 503.
+- [ ] Test: Simulate DB down, verify readiness fails  
+  Tắt DB hoặc sai connection string → readiness 503, liveness vẫn 200.
+- [ ] Test: Simulate high memory, verify liveness fails  
+  (Khó trên local: có thể mock hoặc giảm ngưỡng 90% xuống để test.)
+- [ ] Document: Khi nào dùng readiness vs liveness  
+  Readiness: có nhận traffic không (DB OK, cache OK). Liveness: process còn chạy không (restart nếu die).
 
 ### Task 6: Metrics Collection
 
-- [ ] Add Micrometer dependency
-- [ ] Expose metrics endpoint: `GET /actuator/metrics`
-- [ ] Add custom metric: `requests.total` (counter)
-- [ ] Add custom metric: `request.duration` (timer)
-- [ ] Instrument: All API endpoints với metrics
-- [ ] Verify: Metrics được update correctly
-- [ ] Export: Metrics to Prometheus format (optional)
-- [ ] Document: Metrics available và ý nghĩa
+- [ ] Add Micrometer dependency  
+  `spring-boot-starter-actuator` + `micrometer-registry-prometheus` (nếu export Prometheus).
+- [ ] Expose metrics endpoint: `GET /actuator/metrics`  
+  Bật `management.endpoints.web.exposure.include=health,metrics,prometheus`.
+- [ ] Add custom metric: `requests.total` (counter)  
+  `Counter.builder("requests.total").tag("uri", uri).register(registry).increment()`.
+- [ ] Add custom metric: `request.duration` (timer)  
+  `Timer.builder("request.duration").register(registry).record(duration)`.
+- [ ] Instrument: All API endpoints với metrics  
+  Filter/Interceptor: tăng counter, record timer cho mỗi request.
+- [ ] Verify: Metrics được update correctly  
+  Gọi API vài lần → mở `/actuator/metrics/requests.total` và `request.duration` xem số tăng.
+- [ ] Export: Metrics to Prometheus format (optional)  
+  `GET /actuator/prometheus` trả text format.
+- [ ] Document: Metrics available và ý nghĩa  
+  Liệt kê: requests_total, request_duration_seconds, jvm_memory_used, etc. và cách đọc.
 
 ---
 
@@ -1036,68 +1112,116 @@ Thiết kế chọn mô hình “payment orchestration” tách request path kh�
 
 ### Analysis Task 1: Bottleneck Analysis
 
-- [ ] Chọn một Spring Boot app hiện tại (hoặc tạo simple one)
-- [ ] Run load test với increasing load: 10, 50, 100, 500, 1000 concurrent users
-- [ ] Measure: Latency, throughput, error rate cho mỗi load level
-- [ ] Plot graph: Latency vs Load
-- [ ] Plot graph: Throughput vs Load
-- [ ] Identify: Breaking point (khi latency spikes)
-- [ ] Identify: Type of bottleneck (CPU-bound, I/O-bound, Memory-bound)
-- [ ] Analyze: Tại sao bottleneck xảy ra ở điểm đó?
-- [ ] Propose: 3 solutions để resolve bottleneck
-- [ ] Estimate: Improvement expected từ mỗi solution
+- [ ] Chọn một Spring Boot app hiện tại (hoặc tạo simple one)  
+  Dùng app từ Task 1 (users API) hoặc app có sẵn.
+- [ ] Run load test với increasing load: 10, 50, 100, 500, 1000 concurrent users  
+  JMeter/Gatling: 5 test runs với N = 10, 50, 100, 500, 1000.
+- [ ] Measure: Latency, throughput, error rate cho mỗi load level  
+  Ghi bảng: N | p50 | p95 | p99 | QPS | error %.
+- [ ] Plot graph: Latency vs Load  
+  Trục X: concurrent users, Y: p95 latency (ms).
+- [ ] Plot graph: Throughput vs Load  
+  Trục X: concurrent users, Y: QPS.
+- [ ] Identify: Breaking point (khi latency spikes)  
+  Ví dụ: p95 tăng gấp đôi khi N > 200 → breaking point ~200.
+- [ ] Identify: Type of bottleneck (CPU-bound, I/O-bound, Memory-bound)  
+  CPU: CPU % cao; I/O: DB/disk wait; Memory: heap/GC. Dùng profiler hoặc metrics OS.
+- [ ] Analyze: Tại sao bottleneck xảy ra ở điểm đó?  
+  Ví dụ: 200 threads → connection pool DB 20 → queue → latency tăng.
+- [ ] Propose: 3 solutions để resolve bottleneck  
+  Ví dụ: (1) Tăng connection pool, (2) Thêm cache, (3) Scale out app.
+- [ ] Estimate: Improvement expected từ mỗi solution  
+  Ví dụ: cache → giảm 60% DB load; scale out → tăng 3x throughput.
 
 ### Analysis Task 2: Capacity Planning
 
-- [ ] Scenario: Design system cho 10M users
-- [ ] Estimate: Peak concurrent users (assume 10% of total)
-- [ ] Estimate: Peak QPS (assume 5 requests/user/minute)
-- [ ] Calculate: Database size (assume 1KB per user)
-- [ ] Calculate: Cache size (assume 10% of DB)
-- [ ] Calculate: Bandwidth (assume 5KB per request)
-- [ ] Estimate: Server count (assume 1 server = 10K QPS)
-- [ ] Estimate: Cost (rough, assume $100/server/month)
-- [ ] Create: Capacity planning spreadsheet
-- [ ] Validate: Tất cả assumptions có realistic không?
+- [ ] Scenario: Design system cho 10M users  
+- [ ] Estimate: Peak concurrent users (assume 10% of total)  
+  **10% × 10M = 1M concurrent.** (Có thể giả sử 1–5% tùy loại app.)
+- [ ] Estimate: Peak QPS (assume 5 requests/user/minute)  
+  **1M × 5 / 60 ≈ 83,333 QPS.** (Điều chỉnh theo use case.)
+- [ ] Calculate: Database size (assume 1KB per user)  
+  **10M × 1KB = 10GB** (chỉ user data). Thêm bảng khác → nhân thêm.
+- [ ] Calculate: Cache size (assume 10% of DB)  
+  **10% × 10GB = 1GB** cache. Redis 1GB + overhead.
+- [ ] Calculate: Bandwidth (assume 5KB per request)  
+  **83,333 × 5KB × 2 (req+resp) ≈ 833 MB/s ≈ 6.7 Gbps** (peak). Có thể giảm nếu cache/CDN.
+- [ ] Estimate: Server count (assume 1 server = 10K QPS)  
+  **83,333 / 10,000 ≈ 9** app servers (tối thiểu). Thêm headroom → 15–20.
+- [ ] Estimate: Cost (rough, assume $100/server/month)  
+  **20 × $100 = $2,000/month** (chỉ app). Thêm DB, cache, LB → ước lượng tổng.
+- [ ] Create: Capacity planning spreadsheet  
+  Cột: Metric, Formula, Value. Dòng: Users, Concurrent, QPS, DB size, Cache, Bandwidth, Servers, Cost.
+- [ ] Validate: Tất cả assumptions có realistic không?  
+  So sánh với benchmark thực tế hoặc case study (e.g. 10M user app dùng ~X server).
 
 ### Analysis Task 3: Availability Calculation
 
-- [ ] Calculate: Downtime budget cho 99.9% availability (per year)
-- [ ] Calculate: Downtime budget cho 99.99% availability (per year)
-- [ ] Scenario: System có 5 components, mỗi component có 99.9% availability
-- [ ] Calculate: Overall system availability (series)
-- [ ] Scenario: System có 2 redundant components (parallel), mỗi 99.9%
-- [ ] Calculate: Overall system availability (parallel)
-- [ ] Analyze: Cần bao nhiêu nines để có < 1 hour downtime/year?
-- [ ] Analyze: Nếu MTTR = 1 hour, cần MTBF = ? để đạt 99.99%?
-- [ ] Create: Availability calculator spreadsheet
-- [ ] Document: Findings và insights
+- [ ] Calculate: Downtime budget cho 99.9% availability (per year)  
+  **99.9% → 0.1% downtime → 365×24×60×0.001 = 525.6 phút/năm ≈ 8.76 giờ/năm.**
+- [ ] Calculate: Downtime budget cho 99.99% availability (per year)  
+  **99.99% → 0.01% → 52.56 phút/năm ≈ 52 phút/năm.**
+- [ ] Scenario: System có 5 components, mỗi component có 99.9% availability  
+  **Series: A = 0.999^5 ≈ 0.995 (99.5%).** Downtime ≈ 43.8 giờ/năm.
+- [ ] Calculate: Overall system availability (series)  
+  **A_total = A1 × A2 × A3 × A4 × A5.**
+- [ ] Scenario: System có 2 redundant components (parallel), mỗi 99.9%  
+  **Parallel: A = 1 - (1-0.999)^2 = 1 - 0.000001 = 99.9999%.**
+- [ ] Calculate: Overall system availability (parallel)  
+  **A = 1 - (1-A1)(1-A2).**
+- [ ] Analyze: Cần bao nhiêu nines để có < 1 hour downtime/year?  
+  **1 hour = 60 min → 60/(365×24×60) ≈ 0.0114% downtime → 99.9886% → cần ~4 nines (99.99%).**
+- [ ] Analyze: Nếu MTTR = 1 hour, cần MTBF = ? để đạt 99.99%?  
+  **A = MTBF/(MTBF+MTTR) = 0.9999 → MTBF = 0.9999×MTTR/0.0001 = 9999×1h ≈ 416 ngày.**
+- [ ] Create: Availability calculator spreadsheet  
+  Cột: Component, Availability, (Series/Parallel), Overall. Dòng: từng component.
+- [ ] Document: Findings và insights  
+  Ví dụ: 5 component series → availability giảm mạnh; redundancy cải thiện rõ.
 
 ### Analysis Task 4: Scaling Strategy Comparison
 
-- [ ] Scenario: Payment API, current load = 1K QPS, expected = 10K QPS
-- [ ] Option 1: Vertical scaling (bigger server)
-- [ ] Calculate: Cost của vertical scaling
-- [ ] Calculate: Limitations (max server size)
-- [ ] Option 2: Horizontal scaling (more servers)
-- [ ] Calculate: Cost của horizontal scaling
-- [ ] Calculate: Complexity added
-- [ ] Compare: Vertical vs Horizontal (cost, complexity, limits)
-- [ ] Recommend: Which strategy? Tại sao?
-- [ ] Document: Decision matrix
+- [ ] Scenario: Payment API, current load = 1K QPS, expected = 10K QPS  
+- [ ] Option 1: Vertical scaling (bigger server)  
+  Tăng từ 4 CPU → 16 CPU, 8GB → 32GB.
+- [ ] Calculate: Cost của vertical scaling  
+  Ví dụ: server lớn gấp 2–3 lần giá → $300/tháng thay vì $100.
+- [ ] Calculate: Limitations (max server size)  
+  Max instance (e.g. 64 vCPU) → không scale mãi; single point of failure.
+- [ ] Option 2: Horizontal scaling (more servers)  
+  10 server nhỏ (mỗi 1K QPS).
+- [ ] Calculate: Cost của horizontal scaling  
+  10 × $100 = $1,000/tháng + LB, ops phức tạp hơn.
+- [ ] Calculate: Complexity added  
+  Load balancer, stateless app, monitoring, deployment.
+- [ ] Compare: Vertical vs Horizontal (cost, complexity, limits)  
+  Bảng: Cost | Complexity | Limit | Fault tolerance. Vertical: rẻ hơn lúc nhỏ, đơn giản, có limit, SPOF. Horizontal: scale xa, phức tạp, tốn hơn.
+- [ ] Recommend: Which strategy? Tại sao?  
+  Ví dụ: 10K QPS → horizontal vì cần HA và scale tiếp sau này; vertical nếu budget rất hạn chế và 10K là ceiling.
+- [ ] Document: Decision matrix  
+  Ghi lại bảng so sánh và recommendation.
 
 ### Analysis Task 5: Performance Baseline
 
-- [ ] Measure: Current app performance (baseline)
-- [ ] Metrics: QPS, latency (p50, p95, p99), error rate
-- [ ] Document: Baseline performance
-- [ ] Set: Performance goals (improve by 2x)
-- [ ] Identify: Bottleneck preventing goal achievement
-- [ ] Propose: Optimization plan
-- [ ] Estimate: Expected improvement từ mỗi optimization
-- [ ] Prioritize: Optimizations by impact/effort
-- [ ] Create: Performance improvement roadmap
-- [ ] Document: Analysis và recommendations
+- [ ] Measure: Current app performance (baseline)  
+  Chạy load test 100–500 users, ghi QPS, p50/p95/p99, error %.
+- [ ] Metrics: QPS, latency (p50, p95, p99), error rate  
+  Ví dụ: QPS 800, p50 40ms, p95 120ms, p99 250ms, error 0%.
+- [ ] Document: Baseline performance  
+  Ở mục nào (hardware, JVM, code version), số liệu trên.
+- [ ] Set: Performance goals (improve by 2x)  
+  Mục tiêu: QPS 1600, p95 60ms (giảm 2x).
+- [ ] Identify: Bottleneck preventing goal achievement  
+  Từ profiling: DB query chậm hoặc CPU 100%.
+- [ ] Propose: Optimization plan  
+  (1) Thêm index / optimize query, (2) Cache hot data, (3) Tăng connection pool.
+- [ ] Estimate: Expected improvement từ mỗi optimization  
+  Ví dụ: cache → -40% DB load; index → -50% query time.
+- [ ] Prioritize: Optimizations by impact/effort  
+  Impact cao, effort thấp trước (e.g. index → cache → refactor).
+- [ ] Create: Performance improvement roadmap  
+  Tuần 1: index; Tuần 2: cache; Tuần 3: tuning pool.
+- [ ] Document: Analysis và recommendations  
+  Baseline, goal, bottleneck, plan, ước lượng kết quả.
 
 ---
 
@@ -1105,93 +1229,154 @@ Thiết kế chọn mô hình “payment orchestration” tách request path kh�
 
 ### Self-Evaluation
 
-- [ ] Review: Tất cả study TODOs đã hoàn thành chưa?
-- [ ] Review: Tất cả design exercises đã làm chưa?
-- [ ] Review: Tất cả coding tasks đã code và test chưa?
-- [ ] Review: Tất cả analysis tasks đã complete chưa?
-- [ ] Rate yourself: Understanding của scalability (1-10)
-- [ ] Rate yourself: Understanding của availability (1-10)
-- [ ] Rate yourself: Practical skills (load testing, profiling) (1-10)
-- [ ] Identify: 3 concepts bạn hiểu rõ nhất
-- [ ] Identify: 3 concepts bạn còn confuse
-- [ ] Plan: Làm sao để clarify 3 concepts còn confuse?
+- [ ] Review: Tất cả study TODOs đã hoàn thành chưa?  
+  Đi từng mục Study TODOs, đánh dấu đã đọc/đã làm/đã ghi chú.
+- [ ] Review: Tất cả design exercises đã làm chưa?  
+  Payment Gateway, Betting Platform, Load Estimation – đã có diagram và document chưa.
+- [ ] Review: Tất cả coding tasks đã code và test chưa?  
+  Task 1–6: project tồn tại, chạy được, có test/load test/profiling.
+- [ ] Review: Tất cả analysis tasks đã complete chưa?  
+  Bottleneck, Capacity, Availability, Scaling comparison, Performance baseline – có số liệu và document.
+- [ ] Rate yourself: Understanding của scalability (1-10)  
+  Ghi số và 1–2 câu giải thích (ví dụ: 7 – hiểu vertical/horizontal, chưa sâu Amdahl/Gustafson).
+- [ ] Rate yourself: Understanding của availability (1-10)  
+  Ghi số và giải thích ngắn.
+- [ ] Rate yourself: Practical skills (load testing, profiling) (1-10)  
+  Ghi số và giải thích (đã dùng JMeter/Gatling, VisualVM chưa).
+- [ ] Identify: 3 concepts bạn hiểu rõ nhất  
+  Ví dụ: Horizontal scaling, Availability %, Load testing flow.
+- [ ] Identify: 3 concepts bạn còn confuse  
+  Ví dụ: Amdahl vs Gustafson khi nào dùng, p99 trong thực tế đo thế nào.
+- [ ] Plan: Làm sao để clarify 3 concepts còn confuse?  
+  Ví dụ: Đọc lại chương X, làm thêm bài tập Y, hỏi mentor.
 
 ### Design Review
 
-- [ ] Review Payment Gateway design
-- [ ] Check: Có SPOF không?
-- [ ] Check: Scaling strategy có realistic không?
-- [ ] Check: Capacity estimates có hợp lý không?
-- [ ] Identify: 3 weaknesses trong design
-- [ ] Propose: Improvements cho 3 weaknesses
-- [ ] Compare: Design của bạn vs best practices
-- [ ] Document: Lessons learned
+- [ ] Review Payment Gateway design  
+  Xem lại diagram và doc Payment Gateway (10K TPS, 99.9%).
+- [ ] Check: Có SPOF không?  
+  Single DB? Single LB? Single region? Nếu có → ghi và đề xuất redundancy.
+- [ ] Check: Scaling strategy có realistic không?  
+  Số instance, QPS/instance, DB capacity có khớp với 10K TPS không.
+- [ ] Check: Capacity estimates có hợp lý không?  
+  So với benchmark hoặc case study tương tự.
+- [ ] Identify: 3 weaknesses trong design  
+  Ví dụ: chưa multi-region, cache chưa rõ invalidation, chưa có queue cho peak.
+- [ ] Propose: Improvements cho 3 weaknesses  
+  Mỗi weakness → 1–2 câu cải thiện cụ thể.
+- [ ] Compare: Design của bạn vs best practices  
+  So với tài liệu (e.g. AWS Well-Architected, SRE book) – thiếu gì, thừa gì.
+- [ ] Document: Lessons learned  
+  Đoạn ngắn: 3–5 điều rút ra từ design và review.
 
 ### Code Review
 
-- [ ] Review: Code quality (clean code principles)
-- [ ] Review: Error handling
-- [ ] Review: Logging và monitoring
-- [ ] Review: Performance optimizations
-- [ ] Identify: 3 code improvements needed
-- [ ] Refactor: At least 1 piece of code
-- [ ] Document: Code review findings
+- [ ] Review: Code quality (clean code principles)  
+  Đặt tên, hàm ngắn, ít dependency, dễ test.
+- [ ] Review: Error handling  
+  Exception, retry, logging lỗi, không nuốt lỗi.
+- [ ] Review: Logging và monitoring  
+  Có log request/error, có metrics (counter, timer).
+- [ ] Review: Performance optimizations  
+  Connection pool, cache (nếu có), N+1 query (nếu có DB).
+- [ ] Identify: 3 code improvements needed  
+  Ví dụ: tách service, thêm validation, chuẩn hóa error response.
+- [ ] Refactor: At least 1 piece of code  
+  Chọn 1 improvement và refactor (commit + message rõ ràng).
+- [ ] Document: Code review findings  
+  File README hoặc doc: 3 findings + 1 refactor đã làm.
 
 ### Performance Review
 
-- [ ] Review: Load test results
-- [ ] Review: Profiling results
-- [ ] Identify: Top 3 performance issues
-- [ ] Verify: Performance goals đã đạt chưa?
-- [ ] Document: Performance analysis
-- [ ] Create: Performance improvement plan
+- [ ] Review: Load test results  
+  Bảng/graph QPS, latency, error theo load.
+- [ ] Review: Profiling results  
+  Top CPU, memory, contention (nếu có).
+- [ ] Identify: Top 3 performance issues  
+  Ví dụ: DB query chậm, thiếu cache, connection pool nhỏ.
+- [ ] Verify: Performance goals đã đạt chưa?  
+  So với baseline và target (e.g. 2x QPS, p95 giảm 50%).
+- [ ] Document: Performance analysis  
+  Mô tả hiện trạng, vấn đề, đã làm gì, kết quả.
+- [ ] Create: Performance improvement plan  
+  Danh sách việc tiếp theo (optimize query, thêm cache, …) với ưu tiên.
 
 ### Knowledge Check
 
-- [ ] Explain: Vertical vs Horizontal scaling (viết 1 paragraph, không xem notes)
-- [ ] Explain: Availability calculation (viết công thức và example)
-- [ ] Explain: Bottleneck identification process (viết 5 steps)
-- [ ] Explain: Capacity planning approach (viết 5 steps)
-- [ ] Solve: System có 3 components (99%, 99.9%, 99.99%), tính overall availability
-- [ ] Solve: Estimate QPS cho 1M users, 10% online, 2 requests/user/minute
-- [ ] Verify: Answers của bạn có đúng không?
-- [ ] Document: Knowledge gaps found
+- [ ] Explain: Vertical vs Horizontal scaling (viết 1 paragraph, không xem notes)  
+  **Template:** Vertical = tăng tài nguyên 1 máy (CPU, RAM); horizontal = thêm máy. Vertical đơn giản, có giới hạn; horizontal scale xa hơn, cần LB, stateless, data tier scale. Chọn theo cost, limit, HA.
+- [ ] Explain: Availability calculation (viết công thức và example)  
+  **Công thức:** A = MTBF/(MTBF+MTTR) hoặc Downtime = (1-A)×8760 giờ/năm. **Ví dụ:** 99.9% → 8.76h downtime/năm.
+- [ ] Explain: Bottleneck identification process (viết 5 steps)  
+  **(1)** Đo latency/throughput theo load. **(2)** Tìm điểm latency tăng vọt hoặc throughput plateau. **(3)** Thu thập metrics (CPU, memory, I/O, DB). **(4)** Profiler để xem method/query nào tốn thời gian. **(5)** Kết luận bottleneck (CPU/I/O/Memory/Network) và đề xuất fix.
+- [ ] Explain: Capacity planning approach (viết 5 steps)  
+  **(1)** Ước lượng users/DAU và peak %. **(2)** Tính QPS (requests/user/time). **(3)** Tính storage (data/user × users), bandwidth (QPS × size). **(4)** Tính số server (QPS/server), DB size, cache size. **(5)** Validate với benchmark hoặc case study, ghi assumptions.
+- [ ] Solve: System có 3 components (99%, 99.9%, 99.99%), tính overall availability  
+  **Series:** A = 0.99 × 0.999 × 0.9999 ≈ **0.9899 (98.99%).**
+- [ ] Solve: Estimate QPS cho 1M users, 10% online, 2 requests/user/minute  
+  **1M × 10% = 100K online.** 100K × 2 / 60 ≈ **3,333 QPS.** (Peak có thể ×2–3.)
+- [ ] Verify: Answers của bạn có đúng không?  
+  So lại công thức và số với tài liệu hoặc calculator.
+- [ ] Document: Knowledge gaps found  
+  Ghi lại câu nào chưa trả lời chắc, cần ôn thêm.
 
 ### Reflection
 
-- [ ] Write: 3 điều học được quan trọng nhất tuần này
-- [ ] Write: 2 điều còn confuse hoặc cần học thêm
-- [ ] Write: 1 mistake bạn đã làm và lesson learned
-- [ ] Write: Confidence level cho Week 2 (1-10)
-- [ ] Plan: Preparation cho Week 2 (Availability & Reliability)
-- [ ] Set: Goals cho Week 2
-- [ ] Document: Week 1 reflection (500 words)
+- [ ] Write: 3 điều học được quan trọng nhất tuần này  
+  Ví dụ: (1) Amdahl/Gustafson và bottleneck, (2) Availability % và downtime, (3) Load test + profiling flow.
+- [ ] Write: 2 điều còn confuse hoặc cần học thêm  
+  Ví dụ: p99 trong production đo thế nào, khi nào chọn vertical vs horizontal cho từng layer.
+- [ ] Write: 1 mistake bạn đã làm và lesson learned  
+  Ví dụ: ước lượng QPS quá thấp → điều chỉnh lại formula.
+- [ ] Write: Confidence level cho Week 2 (1-10)  
+  Ghi số và 1 câu (ví dụ: 7 – sẵn sàng HA, circuit breaker).
+- [ ] Plan: Preparation cho Week 2 (Availability & Reliability)  
+  Đọc trước tài liệu Week 2, xem lại circuit breaker, health check.
+- [ ] Set: Goals cho Week 2  
+  Ví dụ: Implement circuit breaker, thiết kế HA cho 1 service.
+- [ ] Document: Week 1 reflection (500 words)  
+  Tổng hợp 3 điều học được, 2 confuse, 1 mistake, confidence, plan Week 2.
 
 ### Mentor Questions (Answer these)
 
-- [ ] Q1: Nếu bạn phải scale từ 1K QPS lên 100K QPS, bạn sẽ làm gì? (viết 5 steps)
-- [ ] Q2: System có 99.9% availability nhưng vẫn bị complain về downtime. Tại sao? (viết analysis)
-- [ ] Q3: Làm sao bạn identify bottleneck trong production system? (viết process)
-- [ ] Q4: Vertical scaling có giới hạn không? Giới hạn là gì? (viết answer)
-- [ ] Q5: Tại sao p99 latency quan trọng hơn average latency? (viết explanation)
-- [ ] Review: Answers của bạn có đủ depth chưa?
-- [ ] Improve: Answers nếu cần
+- [ ] Q1: Nếu bạn phải scale từ 1K QPS lên 100K QPS, bạn sẽ làm gì? (viết 5 steps)  
+  **Template:** (1) Đo bottleneck hiện tại (DB, CPU, network). (2) Scale read: cache + read replica. (3) Scale app: horizontal, stateless, LB. (4) Scale write: shard DB hoặc queue. (5) Load test 100K, monitor, tune.
+- [ ] Q2: System có 99.9% availability nhưng vẫn bị complain về downtime. Tại sao? (viết analysis)  
+  **Gợi ý:** Downtime tập trung (1 lần 30 phút) vs rải rác; user nhạy cảm giờ peak; SLA đo sai (region/endpoint); perceived downtime (latency cao = “chậm”); dependency bên ngoài không nằm trong 99.9%.
+- [ ] Q3: Làm sao bạn identify bottleneck trong production system? (viết process)  
+  **Template:** (1) Metrics (CPU, memory, disk, network, DB connections). (2) APM/tracing (slow request, slow query). (3) Log (error, timeout). (4) So sánh với load (traffic tăng đúng lúc latency tăng?). (5) Reproduce trong staging + profiler.
+- [ ] Q4: Vertical scaling có giới hạn không? Giới hạn là gì? (viết answer)  
+  **Có.** Giới hạn: max CPU/RAM của 1 instance (e.g. 64 vCPU, 256GB); giá tăng phi tuyến; single point of failure; OS/scheduler overhead khi quá lớn.
+- [ ] Q5: Tại sao p99 latency quan trọng hơn average latency? (viết explanation)  
+  Average bị kéo bởi nhiều request nhanh; p99 phản ánh trải nghiệm user tệ nhất (1% request chậm). SLA và user satisfaction thường gắn với tail latency (p95, p99).
+- [ ] Review: Answers của bạn có đủ depth chưa?  
+  Đọc lại 5 câu trả lời: có số, có ví dụ, có process rõ ràng chưa.
+- [ ] Improve: Answers nếu cần  
+  Bổ sung 1–2 câu hoặc 1 ví dụ cho câu còn ngắn.
 
 ---
 
 ## Final Checklist
 
-- [ ] Tất cả Study TODOs: ✅ Complete
-- [ ] Tất cả Design TODOs: ✅ Complete
-- [ ] Tất cả Coding TODOs: ✅ Complete và tested
-- [ ] Tất cả Analysis TODOs: ✅ Complete với documentation
-- [ ] Tất cả Review TODOs: ✅ Complete
-- [ ] Reflection document: ✅ Written
-- [ ] Code committed to repo: ✅ Yes
-- [ ] Design diagrams saved: ✅ Yes
-- [ ] Ready for Week 2: ✅ Yes
+- [ ] Tất cả Study TODOs: ✅ Complete  
+  Đánh dấu khi đã đọc/ghi chú đủ các mục Study.
+- [ ] Tất cả Design TODOs: ✅ Complete  
+  Payment Gateway, Betting Platform, Load Estimation đã có design + document.
+- [ ] Tất cả Coding TODOs: ✅ Complete và tested  
+  Task 1–6 đã code, chạy, test/load test/profiling, có doc.
+- [ ] Tất cả Analysis TODOs: ✅ Complete với documentation  
+  Bottleneck, Capacity, Availability, Scaling, Performance baseline đã có số và doc.
+- [ ] Tất cả Review TODOs: ✅ Complete  
+  Self-eval, Design review, Code review, Performance review, Knowledge check, Reflection, Mentor questions đã làm và ghi lại.
+- [ ] Reflection document: ✅ Written  
+  Có file hoặc section Week 1 reflection ~500 từ.
+- [ ] Code committed to repo: ✅ Yes  
+  Code Week 1 đã push (GitHub/GitLab/…).
+- [ ] Design diagrams saved: ✅ Yes  
+  Diagram Payment Gateway, Betting (và Load Estimation nếu có) đã lưu (draw.io, image, …).
+- [ ] Ready for Week 2: ✅ Yes  
+  Chỉ đánh dấu khi thật sự hoàn thành các mục trên và cảm thấy sẵn sàng.
 
 ---
 
-> **Mentor Final Check**: Nếu bạn check tất cả items trên, bạn đã sẵn sàng cho Week 2. Nếu không, bạn chưa sẵn sàng. Hãy
-> honest với bản thân.
+> **Mentor Final Check**: Nếu bạn check tất cả items trên, bạn đã sẵn sàng cho Week 2. Nếu không, bạn chưa sẵn sàng. Hãy honest với bản thân.
