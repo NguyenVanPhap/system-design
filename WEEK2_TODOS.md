@@ -98,7 +98,7 @@
     - Weighted Round-robin:
         ```
         weights = [weight1, weight2, ..., weightN]
-        currentIndex = 0
+        currentIndex = -1
         currentWeight = 0
         function getNextServer(servers):
             while true:
