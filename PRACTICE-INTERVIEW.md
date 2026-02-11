@@ -109,6 +109,237 @@ public void deposit(Long memberId, BigDecimal amount) {
     walletRepository.incrementBalance(memberId, amount);
 }
 ```
+
+**📚 Giải thích chi tiết về Ledger-based Approach:**
+
+**1️⃣ Ledger-based approach là gì?**
+
+Thay vì chỉ lưu balance, ta lưu thêm **Transaction Ledger (sổ cái)** = lịch sử tất cả giao dịch.
+
+Ví dụ table transaction:
+```
+id | member_id | amount | type    | created_at
+1  | 1001      | +50    | DEPOSIT | 10:01
+2  | 1001      | -20    | BET     | 10:02
+3  | 1001      | +30    | WIN     | 10:03
+```
+
+Balance = SUM(amount), nhưng để query nhanh → vẫn cache balance trong wallet.
+
+**2️⃣ Vì sao Option 4 rất mạnh?**
+
+Code kết hợp:
+- ✅ **Audit log (ledger)**: Lưu lịch sử giao dịch
+- ✅ **Atomic update**: DB đảm bảo thread-safe
+- ✅ **Transaction boundary**: Đảm bảo ACID
+
+→ Đây là chuẩn fintech/banking.
+
+**3️⃣ incrementBalance hoạt động thế nào?**
+
+Implementation:
+```java
+@Modifying
+@Query("""
+UPDATE Wallet w
+SET w.balance = w.balance + :amount
+WHERE w.memberId = :memberId
+""")
+int incrementBalance(@Param("memberId") Long memberId,
+                     @Param("amount") BigDecimal amount);
+```
+
+SQL thực tế:
+```sql
+UPDATE wallet
+SET balance = balance + 100
+WHERE member_id = 1;
+```
+
+👉 DB đảm bảo:
+- Atomic
+- Thread-safe
+- Không race condition
+- Không lost update
+
+**4️⃣ Concurrency xử lý thế nào?**
+
+Giả sử 10 request cùng deposit:
+```sql
+UPDATE wallet SET balance = balance + 10
+```
+
+DB sẽ serialize nội bộ:
+```
++10 → +10 → +10 → ...
+```
+
+➡️ Kết quả đúng 100%. Không cần `@Version` hay `FOR UPDATE`.
+
+**5️⃣ Vì sao vẫn cần ledger?**
+
+Nếu chỉ dùng:
+```sql
+UPDATE wallet SET balance = balance + ?
+```
+
+→ Bạn không biết:
+- Tiền từ đâu ra?
+- Ai cộng?
+- Khi nào?
+- Trace bug thế nào?
+
+Ledger cho bạn:
+- ✅ Audit trail
+- ✅ Reconcile
+- ✅ Debug
+- ✅ Compliance
+- ✅ Rollback logic
+
+**6️⃣ Transaction ở đây cực kỳ quan trọng**
+
+`@Transactional` đảm bảo:
+```
+Insert TX + Update Wallet
+   ↓
+All-or-nothing
+```
+
+Nếu crash giữa chừng → rollback.
+
+❗ Nếu thiếu `@Transactional`:
+- TX insert OK
+- Balance chưa update ❌
+- → Data sai vĩnh viễn
+
+**7️⃣ Chuẩn nâng cao: Idempotency (rất quan trọng với callback/payment)**
+
+Trong betting/payment, callback có thể gửi lại nhiều lần.
+
+👉 Phải chống double deposit.
+
+Thêm unique key:
+```java
+@Entity
+@Table(
+  uniqueConstraints = {
+    @UniqueConstraint(columnNames = {"external_tx_id"})
+  }
+)
+class Transaction {
+   private String externalTxId;
+}
+```
+
+Khi insert trùng → fail → ignore.
+
+**8️⃣ Xử lý rollback / cancel**
+
+Ledger cho phép rollback đúng chuẩn:
+
+Ví dụ cancel bet:
+```java
+// insert reversal tx
+tx.amount = -100;
+tx.type = CANCEL;
+save(tx);
+
+// update balance
+incrementBalance(memberId, -100);
+```
+
+Không bao giờ sửa record cũ ❌  
+Chỉ append record mới ✅
+
+→ Financial correctness.
+
+**9️⃣ Kiến trúc thực tế (Real system)**
+
+Trong hệ thống betting lớn:
+```
+API
+ ↓
+Wallet Service
+ ↓
+--------------------------------
+|  Transaction Table (Ledger)  |
+|  Wallet Table (Snapshot)     |
+--------------------------------
+```
+
+Luồng:
+1. Validate
+2. Check idempotent
+3. Insert ledger
+4. Update balance
+5. Commit
+
+**🔟 So sánh 4 options**
+
+| Option | An toàn | Scale | Audit | Dùng cho tiền |
+|--------|---------|-------|-------|---------------|
+| Pessimistic | ⭐⭐⭐⭐ | ❌ | ❌ | ⚠️ |
+| Optimistic | ⭐⭐ | ⭐⭐⭐ | ❌ | ❌ |
+| Atomic SQL | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ❌ | ⚠️ |
+| **Ledger + Atomic** | **⭐⭐⭐⭐⭐** | **⭐⭐⭐⭐⭐** | **✅** | **✅✅✅** |
+
+👉 **Option 4 = Best Practice** cho hệ thống tài chính.
+
+**1️⃣1️⃣ Best Practice cho Wallet (Pro level)**
+
+Với domain betting/payout/callback/wallet:
+
+✅ Ledger table  
+✅ Atomic update  
+✅ Idempotency key  
+✅ Unique index  
+✅ Transaction boundary
+
+Đây là level production lớn.
+
+**1️⃣2️⃣ Bản nâng cấp (Advanced)**
+
+Nếu traffic rất lớn:
+
+➡️ Event-driven:
+```
+API → Kafka → Wallet Consumer → DB
+```
+
+Ledger là source of truth.  
+Nhưng nền tảng vẫn là Option 4.
+
+**✅ Kết luận**
+
+Option 4:
+- ✔️ Đúng hướng
+- ✔️ Production-grade
+- ✔️ Scalable
+- ✔️ Safe cho tiền
+
+Chỉ cần thêm:
+- 🔹 Unique tx id
+- 🔹 Retry DB deadlock
+- 🔹 Monitoring
+
+là thành "bank-grade" rồi 😄
+
+**⚠️ Lưu ý:**
+
+❌ **Không hợp với:**
+- CMS content
+- Wallet real-time
+- Betting
+- Stock trading
+- Jackpot
+
+(vì conflict nhiều → retry liên tục → lag)
+
+✅ **Hợp với:**
+- Wallet/Balance operations
+- Payment processing
+- Financial transactions
+- Audit-critical systems
 </details>
 
 ---
