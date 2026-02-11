@@ -69,13 +69,99 @@ public void deposit(Long memberId, BigDecimal amount) {
 }
 ```
 
+**📚 Giải thích chi tiết về Pessimistic Locking:**
+
+**1️⃣ Pessimistic Locking là gì?**
+
+Pessimistic Locking = **"Lock trước khi đọc"** - Giả định sẽ có conflict, nên lock ngay từ đầu.
+
+SQL thực tế:
+```sql
+SELECT * FROM wallet WHERE member_id = 1 FOR UPDATE;
+-- Lock row này, các transaction khác phải đợi
+```
+
+**2️⃣ Cơ chế hoạt động:**
+
+```java
+findByMemberIdForUpdate(memberId)
+```
+
+→ Tạo `SELECT ... FOR UPDATE` lock:
+- ✅ Lock row ngay khi SELECT
+- ✅ Các transaction khác phải **đợi** (block) cho đến khi commit/rollback
+- ✅ Đảm bảo chỉ 1 transaction modify tại 1 thời điểm
+
+**3️⃣ Flow khi có 2 threads đồng thời:**
+
+```
+Thread 1: SELECT ... FOR UPDATE (lock wallet 1) ✅
+Thread 2: SELECT ... FOR UPDATE (đợi lock...) ⏳
+Thread 1: UPDATE balance = 100
+Thread 1: COMMIT → release lock
+Thread 2: SELECT ... FOR UPDATE (đã có lock) ✅
+Thread 2: UPDATE balance = 200
+Thread 2: COMMIT
+```
+
+➡️ Kết quả: balance = 200 (đúng!)
+
+**4️⃣ Ưu điểm:**
+
+✅ **An toàn cao**: Không có race condition  
+✅ **Đơn giản**: Dễ hiểu, dễ implement  
+✅ **Đảm bảo consistency**: DB tự quản lý lock
+
+**5️⃣ Nhược điểm:**
+
+❌ **Performance thấp**: Block các transaction khác  
+❌ **Deadlock risk**: Có thể xảy ra deadlock nếu lock nhiều rows  
+❌ **Không scale tốt**: Với high concurrency → nhiều threads đợi  
+❌ **Không có audit trail**: Chỉ update balance, không biết lịch sử
+
+**6️⃣ Khi nào dùng?**
+
+✅ **Hợp với:**
+- Low concurrency
+- Critical operations (phải đảm bảo đúng)
+- Short transactions
+
+❌ **Không hợp với:**
+- High concurrency (betting, trading)
+- Long-running transactions
+- CMS content (conflict nhiều → lag)
+
+**7️⃣ Deadlock scenario:**
+
+```java
+// Thread 1
+transfer(1, 2, 100) → Lock wallet 1, đợi wallet 2
+
+// Thread 2  
+transfer(2, 1, 50) → Lock wallet 2, đợi wallet 1
+
+// → DEADLOCK! 💀
+```
+
+**Solution:** Lock theo thứ tự nhất quán (ID nhỏ trước).
+
+**8️⃣ So sánh thực tế trong hệ thống tài chính:**
+
+| Tiêu chí | Pessimistic |
+|----------|------------|
+| Block | ✅ Có |
+| Deadlock | ⚠️ Có thể |
+| Performance | ❌ Thấp hơn |
+| Độ an toàn | ⭐⭐⭐⭐⭐ Rất cao |
+| Ví / Tiền | ⭐⭐⭐⭐ (ít dùng cho wallet real-time) |
+
 **Option 2: Optimistic Locking với @Version**
 ```java
 @Entity
 public class Wallet {
     @Version
     private Long version;
-    // ...
+    // ... 
 }
 
 @Transactional
@@ -87,12 +173,253 @@ public void deposit(Long memberId, BigDecimal amount) {
 }
 ```
 
+**📚 Giải thích chi tiết về Optimistic Locking:**
+
+**1️⃣ Optimistic Locking là gì?**
+
+Optimistic Locking = **"Không lock, check version khi save"** - Giả định ít conflict, chỉ check khi commit.
+
+Cơ chế:
+- ✅ Không lock DB khi đọc
+- ✅ Check version field khi save
+- ✅ Nếu version changed → throw exception → retry
+
+**2️⃣ Cơ chế hoạt động:**
+
+```java
+@Entity
+public class Wallet {
+    @Version
+    private Long version; // Auto-increment mỗi khi update
+}
+```
+
+**Flow:**
+```
+Thread 1: SELECT wallet (version = 1)
+Thread 2: SELECT wallet (version = 1) ✅ Không block!
+Thread 1: UPDATE balance, version = 2 → COMMIT ✅
+Thread 2: UPDATE balance, version = 2 → ❌ FAIL!
+         WHERE version = 1 (không match)
+         → OptimisticLockException
+Thread 2: Retry logic → SELECT lại (version = 2)
+Thread 2: UPDATE lại với version mới
+```
+
+**3️⃣ SQL thực tế:**
+
+```sql
+-- SELECT (không lock)
+SELECT id, balance, version FROM wallet WHERE member_id = 1;
+-- version = 1
+
+-- UPDATE (check version)
+UPDATE wallet 
+SET balance = balance + 100, version = version + 1
+WHERE member_id = 1 AND version = 1;
+
+-- Nếu version đã thay đổi → 0 rows affected → Exception!
+```
+
+**4️⃣ Ưu điểm:**
+
+✅ **Không block**: Các transaction khác vẫn đọc được  
+✅ **Performance cao**: Không đợi lock  
+✅ **Scale tốt**: Phù hợp high concurrency  
+✅ **Không deadlock**: Không có lock → không deadlock
+
+**5️⃣ Nhược điểm:**
+
+❌ **Phải retry**: Nếu conflict → phải retry lại  
+❌ **Retry logic phức tạp**: Phải implement retry mechanism  
+❌ **Có thể retry nhiều lần**: Với high conflict → retry liên tục → lag  
+❌ **Không đảm bảo 100%**: Vẫn có thể fail sau nhiều retry
+
+**6️⃣ Khi nào dùng?**
+
+✅ **Hợp với:**
+- High concurrency
+- Read-heavy workloads
+- CMS content (ít conflict)
+- Long-running transactions
+
+❌ **Không hợp với:**
+- Wallet real-time (conflict nhiều → retry liên tục → lag)
+- Betting (cần đảm bảo đúng 100%)
+- Stock trading (race condition nguy hiểm)
+- Jackpot (conflict cao)
+
+**7️⃣ Retry logic cần implement:**
+
+```java
+@Retryable(value = OptimisticLockException.class, maxAttempts = 3)
+@Transactional
+public void deposit(Long memberId, BigDecimal amount) {
+    Wallet wallet = walletRepository.findByMemberId(memberId);
+    BigDecimal currentBalance = wallet.getBalance();
+    wallet.setBalance(currentBalance.add(amount));
+    walletRepository.save(wallet);
+}
+```
+
+**8️⃣ So sánh thực tế trong hệ thống tài chính:**
+
+| Tiêu chí | Optimistic |
+|----------|------------|
+| Block | ❌ Không |
+| Deadlock | ✅ Không |
+| Performance | ⭐⭐⭐ Cao |
+| Độ an toàn | ⭐⭐ Phải retry |
+| Ví / Tiền | ⭐⭐ (ít dùng cho wallet) |
+
+**9️⃣ Vấn đề với Wallet:**
+
+Với wallet/balance operations:
+- Conflict rate **rất cao** (nhiều người cùng deposit/withdraw)
+- Retry liên tục → **lag** → bad UX
+- Không đảm bảo đúng 100% → **nguy hiểm với tiền**
+
+➡️ **Không recommend cho wallet/balance!**
+
 **Option 3: Database-level atomic update**
 ```java
 @Modifying
 @Query("UPDATE Wallet w SET w.balance = w.balance + :amount WHERE w.memberId = :memberId")
 void incrementBalance(@Param("memberId") Long memberId, @Param("amount") BigDecimal amount);
 ```
+
+**📚 Giải thích chi tiết về Database-level Atomic Update:**
+
+**1️⃣ Atomic Update là gì?**
+
+Atomic Update = **"Update trực tiếp ở DB level"** - Không đọc rồi update, mà update trực tiếp bằng SQL.
+
+SQL thực tế:
+```sql
+UPDATE wallet
+SET balance = balance + 100
+WHERE member_id = 1;
+```
+
+**2️⃣ Cơ chế hoạt động:**
+
+```java
+walletRepository.incrementBalance(memberId, amount);
+```
+
+→ Tạo SQL:
+```sql
+UPDATE wallet 
+SET balance = balance + :amount 
+WHERE member_id = :memberId
+```
+
+**Flow khi có 10 threads đồng thời:**
+```
+Thread 1: UPDATE balance = balance + 10
+Thread 2: UPDATE balance = balance + 10
+Thread 3: UPDATE balance = balance + 10
+...
+Thread 10: UPDATE balance = balance + 10
+```
+
+DB sẽ **serialize** nội bộ:
+```
++10 → +10 → +10 → ... → +10
+```
+
+➡️ Kết quả: balance tăng đúng 100!
+
+**3️⃣ Vì sao atomic?**
+
+DB đảm bảo:
+- ✅ **Atomic**: Toàn bộ operation hoặc thành công hoặc fail
+- ✅ **Thread-safe**: DB tự quản lý concurrency
+- ✅ **Không race condition**: Không có read-then-write
+- ✅ **Không lost update**: Mỗi UPDATE được apply đúng
+
+**4️⃣ Ưu điểm:**
+
+✅ **Performance cao**: Không cần lock, không cần retry  
+✅ **Đơn giản**: Chỉ 1 câu SQL  
+✅ **Thread-safe**: DB đảm bảo  
+✅ **Scale tốt**: Phù hợp high concurrency  
+✅ **Không deadlock**: Không có lock → không deadlock
+
+**5️⃣ Nhược điểm:**
+
+❌ **Không có audit trail**: Chỉ update balance, không biết lịch sử  
+❌ **Khó debug**: Không biết tiền từ đâu, ai cộng, khi nào  
+❌ **Không có rollback logic**: Khó reverse transaction  
+❌ **Check result phức tạp**: Phải check `updated == 0` để biết có update không
+
+**6️⃣ Check result quan trọng:**
+
+```java
+@Modifying
+@Query("UPDATE Wallet w SET w.balance = w.balance + :amount WHERE w.memberId = :memberId")
+int incrementBalance(@Param("memberId") Long memberId, @Param("amount") BigDecimal amount);
+
+// Usage
+int updated = walletRepository.incrementBalance(memberId, amount);
+if (updated == 0) {
+    throw new RuntimeException("Wallet not found or update failed");
+}
+```
+
+**7️⃣ Khi nào dùng?**
+
+✅ **Hợp với:**
+- Wallet/Balance operations (best practice!)
+- High concurrency
+- Simple increment/decrement
+- Performance-critical
+
+❌ **Không hợp với:**
+- Cần audit trail
+- Cần lịch sử giao dịch
+- Cần rollback logic
+- Compliance requirements
+
+**8️⃣ So sánh thực tế trong hệ thống tài chính:**
+
+| Tiêu chí | Atomic SQL |
+|----------|------------|
+| Block | ❌ Không |
+| Deadlock | ✅ Không |
+| Performance | ⭐⭐⭐⭐ Rất cao |
+| Độ an toàn | ⭐⭐⭐⭐ Rất cao |
+| Ví / Tiền | ⭐⭐⭐⭐ (thường dùng cho wallet) |
+| Audit | ❌ Không có |
+
+**9️⃣ Best Practice cho Wallet:**
+
+Với wallet/balance: **thường dùng Pessimistic hoặc Atomic SQL**.
+
+Atomic SQL là cách **tối ưu nhất** cho simple balance operations:
+
+```java
+@Modifying
+@Query("""
+UPDATE Wallet w
+SET w.balance = w.balance + :amount
+WHERE w.memberId = :memberId
+""")
+int deposit(@Param("memberId") Long memberId,
+            @Param("amount") BigDecimal amount);
+```
+
+👉 DB tự đảm bảo atomic  
+👉 Không cần lock  
+👉 Không race condition
+
+**🔟 Kết hợp với Ledger:**
+
+Để có cả **performance** và **audit trail**, kết hợp với ledger (Option 4):
+- Ledger table: Lưu lịch sử
+- Atomic update: Update balance nhanh
+
+→ **Best of both worlds!**
 
 **Option 4: Ledger-based approach**
 ```java
