@@ -29,7 +29,7 @@ Xem file [SYSTEM_DESIGN_ROADMAP.md](./SYSTEM_DESIGN_ROADMAP.md) để bắt đ�
 
 - [WEEK1_TODOS.md](./WEEK1_TODOS.md) - Tuần 1: Scalability & Availability Fundamentals
 - [WEEK2_TODOS.md](./WEEK2_TODOS.md) - Tuần 2: Scaling Architecture & High Availability
-- [WEEK3_TODOS.md](./WEEK3_TODOS.md) - Tuần 3: Database Design & SQL Scaling
+- [WEEK3_TODOS.md](./WEEK3_DOC) - Tuần 3: Database Design & SQL Scaling
 - [WEEK4_TODOS.md](./WEEK4_TODOS.md) - Tuần 4: Database Sharding & Partitioning
 - [WEEK5_TODOS.md](./WEEK5_TODOS.md) - Tuần 5: Caching & Performance Optimization
 - [WEEK6_TODOS.md](./WEEK6_TODOS.md) - Tuần 6: Load Balancing & API Design

@@ -71,88 +71,173 @@
     - Nếu disable FK: bắt buộc có **application-level validation + background consistency checks** (job reconcile), và design để tránh orphan records.
 
 ### Indexing Deep Dive
-- [ ] Đọc về "B-tree index" - how it works internally
-- [ ] Đọc về "Hash index" - use cases và limitations
-- [ ] Đọc về "Composite index" - column order matters
-- [ ] Viết notes: Index selectivity - what is it? Why important?
-- [ ] Đọc về "covering index" - index-only scans
-- [ ] Đọc về "partial index" - conditional indexes
-- [ ] Đọc về "unique index" vs "non-unique index" - performance difference
-- [ ] Đọc về "index maintenance" - INSERT/UPDATE/DELETE overhead
-- [ ] Research: How many indexes is too many? (general rule)
-- [ ] Đọc về "index fragmentation" - when và how to rebuild
-- [ ] Đọc về "clustered index" vs "non-clustered index" (SQL Server) hoặc "primary key" vs "secondary index" (MySQL)
-- [ ] Đọc về "full-text index" - when to use
+- [x] Đọc về "B-tree index" - how it works internally
+  - Cấu trúc **cây cân bằng nhiều nhánh**, keys được sort trong nodes; lookup/insert/delete đều ~O(log n) vì chiều cao cây thấp và được tự re-balance.
+- [x] Đọc về "Hash index" - use cases và limitations
+  - Dùng **hash(key) → bucket** nên rất tốt cho **equality lookup** (=), nhưng không hỗ trợ range scan, ORDER BY hay prefix search; phù hợp key-value exact match.
+- [x] Đọc về "Composite index" - column order matters
+  - Index `(A,B,C)` hữu dụng cho điều kiện bắt đầu từ trái: `A`, `A,B`, `A,B,C`; nếu chỉ filter bằng `B` hoặc `C` (bỏ A) thì thường không tận dụng được index tốt.
+- [x] Viết notes: Index selectivity - what is it? Why important?
+  - **Selectivity = distinct_values / total_rows**; càng gần 1 càng tốt.  
+  - High selectivity → index filter được nhiều rows → query nhanh hơn; low selectivity (vd: giới tính) thường không đáng để index một mình.
+- [x] Đọc về "covering index" - index-only scans
+  - Index chứa **tất cả columns** mà query cần → engine chỉ đọc index, không phải quay lại table (**index-only scan**), giảm I/O và latency.
+- [x] Đọc về "partial index" - conditional indexes
+  - Index chỉ tạo trên subset rows với `WHERE` (vd: `status = 'PENDING'`) → index nhỏ, tập trung cho hot subset, giảm overhead write.
+- [x] Đọc về "unique index" vs "non-unique index" - performance difference
+  - Unique index enforce uniqueness và cho phép optimizer giả định tối đa 1 row match, đôi khi cho plan tốt hơn; nhưng mọi write phải check unique constraint → thêm chút overhead.
+- [x] Đọc về "index maintenance" - INSERT/UPDATE/DELETE overhead
+  - Mỗi thay đổi dữ liệu phải update **tất cả indexes liên quan**; nhiều index → write cost tăng (CPU + I/O), đặc biệt trên bảng lớn.
+- [x] Research: How many indexes is too many? (general rule)
+  - Rule of thumb: small table: 3–5 index; medium: 5–7; large: 5–10 là đã phải rất cân nhắc; luôn dựa vào **read/write profile + index usage stats** để quyết.
+- [x] Đọc về "index fragmentation" - when và how to rebuild
+  - Nhiều INSERT/DELETE/UPDATE gây pages rỗng/không liên tục → fragmentation, làm scan chậm.  
+  - Rebuild/reorganize index khi fragmentation cao (vd > ~30%) hoặc sau bulk operations lớn.
+- [x] Đọc về "clustered index" vs "non-clustered index" (SQL Server) hoặc "primary key" vs "secondary index" (MySQL)
+  - **Clustered/primary**: data physically sắp theo key, tốt cho range scan; chỉ có 1.  
+  - **Non-clustered/secondary**: cấu trúc riêng chứa key + pointer tới row/PK; có thể có nhiều.
+- [x] Đọc về "full-text index" - when to use
+  - Dùng cho **search text** (title/content), support tokenization, ranking; không thay thế được search engine chuyên dụng nhưng tốt cho full-text search đơn giản trong DB.
 
 ### Query Optimization
-- [ ] Đọc về "EXPLAIN" / "EXPLAIN PLAN" - how to read output
-- [ ] Đọc về "query execution plan" - steps database takes
-- [ ] Đọc về "table scan" vs "index scan" vs "index seek"
-- [ ] Đọc về "cost-based optimizer" - how it works
-- [ ] Đọc về "query hints" - when to use (rarely)
-- [ ] Đọc về "statistics" - why database needs them
-- [ ] Đọc về "cardinality estimation" - why it matters
-- [ ] Đọc về "JOIN algorithms" - nested loop, hash join, merge join
-- [ ] Đọc về "subquery" vs "JOIN" - performance comparison
-- [ ] Đọc về "EXISTS" vs "IN" vs "JOIN" - when to use which
-- [ ] Đọc về "LIMIT/OFFSET" performance issues
-- [ ] Đọc về "cursor-based pagination" - better alternative
+- [x] Đọc về "EXPLAIN" / "EXPLAIN PLAN" - how to read output
+  - Tập trung vào: **loại scan/join**, index nào dùng, rows ước tính/actual, và flags Extra (vd: `Using where`, `Using filesort`, `Using temporary`) để tìm chỗ full scan hoặc sort tốn kém.
+- [x] Đọc về "query execution plan" - steps database takes
+  - Plan cho biết thứ tự đọc bảng, cách JOIN, cách apply WHERE/GROUP BY/ORDER BY; hiểu plan giúp biết nên thêm/sửa index, đổi query thế nào.
+- [x] Đọc về "table scan" vs "index scan" vs "index seek"
+  - **Table scan**: đọc hết bảng → O(n), tệ cho bảng lớn.  
+  - **Index scan**: scan toàn index (thường cho range).  
+  - **Index seek**: nhảy thẳng vào đoạn cần trong index → nhanh nhất.
+- [x] Đọc về "cost-based optimizer" - how it works
+  - Optimizer sinh nhiều plan, estimate cost dựa trên **statistics**, rồi chọn plan rẻ nhất; stats xấu/outdated → chọn plan tệ.
+- [x] Đọc về "query hints" - when to use (rarely)
+  - Hints ép engine dùng index/plan cụ thể; chỉ nên dùng khi đã hiểu rõ và không thể fix bằng schema/index/stats, vì hints có thể lỗi thời khi data thay đổi.
+- [x] Đọc về "statistics" - why database needs them
+  - Stats (row count, distribution, distinct values) là input cho optimizer để estimate **cardinality** và cost; cần được update định kỳ.
+- [x] Đọc về "cardinality estimation" - why it matters
+  - Ước lượng sai số rows → chọn sai join order/algorithm, có thể dẫn tới plan cực chậm (hash join thay vì nested loop, hoặc ngược lại).
+- [x] Đọc về "JOIN algorithms" - nested loop, hash join, merge join
+  - **Nested loop**: tốt khi 1 bảng nhỏ + index trên bảng kia.  
+  - **Hash join**: build hash trên bảng nhỏ, tốt cho large scans không index.  
+  - **Merge join**: hiệu quả khi cả 2 input đã sort theo join key.
+- [x] Đọc về "subquery" vs "JOIN" - performance comparison
+  - Nhiều subquery có thể được rewrite thành JOIN, thường dễ optimize và rõ ràng hơn; đa số engine cũng transform internally, nhưng viết JOIN rõ ràng thường an toàn.
+- [x] Đọc về "EXISTS" vs "IN" vs "JOIN" - when to use which
+  - **EXISTS**: check tồn tại, dừng sớm; tốt cho existence check.  
+  - **IN**: tốt với list nhỏ; subquery lớn có thể kém.  
+  - **JOIN**: khi cần dữ liệu từ nhiều bảng; thường nhanh nhất cho large sets.
+- [x] Đọc về "LIMIT/OFFSET" performance issues
+  - `LIMIT ... OFFSET big` buộc DB **skip** rất nhiều rows → chậm dần theo page; tệ cho deep pagination.
+- [x] Đọc về "cursor-based pagination" - better alternative
+  - Dùng **key của row cuối** làm cursor (`WHERE id > last_id`) thay vì OFFSET, tận dụng index tốt hơn và không bị skip/lặp khi có dữ liệu mới.
 
 ### Connection Pooling
-- [ ] Đọc về "connection pooling" - why needed?
-- [ ] Đọc về "HikariCP" - default Spring Boot pool
-- [ ] Đọc về pool size calculation: connections = ((core_count * 2) + effective_spindle_count)
-- [ ] Đọc về "connection pool tuning" - min, max, idle timeout
-- [ ] Đọc về "connection leak detection"
-- [ ] Đọc về "connection timeout" vs "query timeout"
-- [ ] Research: HikariCP configuration best practices
-- [ ] Đọc về "prepared statements" - performance và security
-- [ ] Đọc về "statement caching" - reduce parsing overhead
+- [x] Đọc về "connection pooling" - why needed?
+  - Tạo/đóng DB connection rất đắt (network handshake, auth); pool reuse connections, giới hạn max concurrent connections, cải thiện latency và stability.
+- [x] Đọc về "HikariCP" - default Spring Boot pool
+  - HikariCP là default pool trong Spring Boot, tối ưu performance, ít config nhưng đủ hooks cho tuning, support metrics tốt.
+- [x] Đọc về pool size calculation: connections = ((core_count * 2) + effective_spindle_count)
+  - Công thức này cho **starting point**; sau đó phải dựa trên metrics (active vs idle, wait time) và capacity DB thực tế để tune.
+- [x] Đọc về "connection pool tuning" - min, max, idle timeout
+  - `minimumIdle`, `maximumPoolSize`, `idleTimeout`, `maxLifetime`, `connectionTimeout` cần align với pattern traffic; tránh max quá lớn gây overload DB, cũng tránh quá nhỏ gây wait nhiều.
+- [x] Đọc về "connection leak detection"
+  - Leak xảy ra khi mượn connection mà không trả; HikariCP có `leakDetectionThreshold` để log cảnh báo khi 1 connection bị giữ quá lâu → giúp bắt bug.
+- [x] Đọc về "connection timeout" vs "query timeout"
+  - **Connection timeout**: thời gian chờ lấy connection từ pool.  
+  - **Query timeout**: thời gian tối đa cho một query chạy; bảo vệ khỏi query treo/hỏng plan.
+- [x] Research: HikariCP configuration best practices
+  - Giữ pool size **vừa đủ**, bật metrics, set `maxLifetime` < lifetime thực của DB connections, và test dưới load thật để tune; không set timeout quá cao khiến request treo lâu.
+- [x] Đọc về "prepared statements" - performance và security
+  - Prepared statements tách query template và params → tránh SQL injection và reuse plan, giảm chi phí parse/optimize lặp lại.
+- [x] Đọc về "statement caching" - reduce parsing overhead
+  - Cache prepared statements (client side hoặc server side) giúp tránh parse/plan lại; đặc biệt hiệu quả với query lặp nhiều.
 
 ### Read Replicas & Replication
-- [ ] Đọc về "master-slave replication" - how it works
-- [ ] Đọc về "replication lag" - what causes it?
-- [ ] Đọc về "eventual consistency" trong read replicas
-- [ ] Đọc về "read-after-write consistency" problem
-- [ ] Đọc về "read scaling" - when read replicas help
-- [ ] Đọc về "write scaling" - read replicas DON'T help
-- [ ] Research: MySQL replication setup
-- [ ] Research: PostgreSQL replication setup
-- [ ] Đọc về "replication topologies" - chain, star, etc.
-- [ ] Đọc về "failover" trong master-slave setup
+- [x] Đọc về "master-slave replication" - how it works
+  - Master ghi data, log lại (binlog/WAL); slaves đọc log và apply theo thứ tự → dữ liệu trên slave **trễ** so với master.
+- [x] Đọc về "replication lag" - what causes it?
+  - Network latency, load cao trên slave, disk chậm, hoặc burst write lớn trên master khiến slave apply không kịp.
+- [x] Đọc về "eventual consistency" trong read replicas
+  - Slave chỉ đảm bảo **eventual** sync; tại một thời điểm có thể outdated vài giây (hoặc hơn) so với master.
+- [x] Đọc về "read-after-write consistency" problem
+  - Sau khi user ghi (update balance) vào master, nếu ngay lập tức đọc từ slave có thể không thấy update → cần route các read-critical về master hoặc có strategy đặc biệt.
+- [x] Đọc về "read scaling" - when read replicas help
+  - Đọc nhiều hơn ghi, query chủ yếu là read-only/analytics → có thể offload sang nhiều slaves để scale read.
+- [x] Đọc về "write scaling" - read replicas DON'T help
+  - Việc ghi vẫn bottleneck ở master; replicas chỉ giúp đọc, không tăng write throughput (trừ khi sharding).
+- [x] Research: MySQL replication setup
+  - MySQL dùng binlog, slave `CHANGE MASTER TO ...` để subscribe; có nhiều mode (async, semi-sync) với trade-off latency vs durability.
+- [x] Research: PostgreSQL replication setup
+  - PostgreSQL dùng WAL shipping/streaming replication; slaves thường là hot-standby có thể phục vụ read-only.
+- [x] Đọc về "replication topologies" - chain, star, etc.
+  - Chain (master → slave1 → slave2...), fan-out/star từ master, multi-tier; mỗi kiểu có trade-off về **lag**, độ phức tạp và single points of failure.
+- [x] Đọc về "failover" trong master-slave setup
+  - Cần cơ chế promote slave lên master + re-point các node khác; phải xử lý split-brain, mất dữ liệu chưa replicate, và đảm bảo app biết master mới.
 
 ### Partitioning Basics
-- [ ] Đọc về "horizontal partitioning" (sharding)
-- [ ] Đọc về "vertical partitioning" (column splitting)
-- [ ] Đọc về "range partitioning" - partition by date range
-- [ ] Đọc về "hash partitioning" - partition by hash
-- [ ] Đọc về "list partitioning" - partition by category
-- [ ] Đọc về "partition pruning" - query optimization
-- [ ] Đọc về "cross-partition queries" - performance impact
-- [ ] Research: MySQL partitioning
-- [ ] Research: PostgreSQL partitioning
+- [x] Đọc về "horizontal partitioning" (sharding)
+  - Chia rows theo key (vd: user_id) ra nhiều shard/partition; mỗi partition chứa subset của rows nhưng full columns.
+- [x] Đọc về "vertical partitioning" (column splitting)
+  - Chia columns của cùng 1 logical entity ra nhiều bảng (hot columns vs cold/large columns) để tối ưu I/O và width của row.
+- [x] Đọc về "range partitioning" - partition by date range
+  - Mỗi partition là 1 khoảng (vd: theo tháng/năm); cực hợp cho time-series và queries theo date range.
+- [x] Đọc về "hash partitioning" - partition by hash
+  - Hash(key) mod N → chia đều data, giúp balance load; nhưng cross-key range scan kém tự nhiên hơn range partition.
+- [x] Đọc về "list partitioning" - partition by category
+  - Phân theo set giá trị cụ thể (region = US/EU/APAC); hữu ích khi workload khác nhau theo nhóm giá trị.
+- [x] Đọc về "partition pruning" - query optimization
+  - Optimizer chỉ scan partitions có liên quan dựa trên điều kiện WHERE (ví dụ theo date) → giảm I/O rất nhiều nếu partition design đúng.
+- [x] Đọc về "cross-partition queries" - performance impact
+  - Query phải chạm nhiều partition/shard sẽ tốn chi phí tổng hợp/merge, có thể mất lợi thế partition; cần design access pattern để đa số query chỉ chạm ít partition.
+- [x] Research: MySQL partitioning
+  - MySQL hỗ trợ range/list/hash partition ở mức table; cần cẩn thận với constraints và index (index thường per-partition).
+- [x] Research: PostgreSQL partitioning
+  - PostgreSQL có declarative partitioning (range/list/hash); query planner làm pruning khá tốt nếu WHERE align với partition key.
 
 ### Transaction Isolation Levels
-- [ ] Đọc về "ACID properties" - Atomicity, Consistency, Isolation, Durability
-- [ ] Đọc về "transaction isolation levels" - READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE
-- [ ] Đọc về "dirty read" - what is it?
-- [ ] Đọc về "non-repeatable read" - what is it?
-- [ ] Đọc về "phantom read" - what is it?
-- [ ] Viết table: Isolation level → Prevents which anomalies?
-- [ ] Đọc về "MVCC" (Multi-Version Concurrency Control) - how it works
-- [ ] Đọc về "locking" - shared locks, exclusive locks
-- [ ] Đọc về "deadlock" - what causes it? How to prevent?
-- [ ] Đọc về "optimistic locking" vs "pessimistic locking"
-- [ ] Research: Default isolation level trong MySQL vs PostgreSQL
+- [x] Đọc về "ACID properties" - Atomicity, Consistency, Isolation, Durability
+  - **Atomicity**: all-or-nothing; **Consistency**: không phá vỡ invariants; **Isolation**: transaction như chạy tuần tự; **Durability**: đã commit thì không mất (dù crash).
+- [x] Đọc về "transaction isolation levels" - READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE
+  - Mỗi level cấm thêm một số anomaly, đổi lại cost concurrency/performance cao hơn.
+- [x] Đọc về "dirty read" - what is it?
+  - Đọc dữ liệu từ transaction khác **chưa commit**; nếu bị rollback thì read đó là “bẩn”.
+- [x] Đọc về "non-repeatable read" - what is it?
+  - Cùng 1 query trong 1 transaction nhưng chạy 2 lần cho ra **giá trị khác nhau** vì transaction khác đã commit update.
+- [x] Đọc về "phantom read" - what is it?
+  - Lần sau xuất hiện **thêm/hết rows** thỏa điều kiện, không chỉ đổi giá trị, do transaction khác insert/delete giữa chừng.
+- [x] Viết table: Isolation level → Prevents which anomalies?
+  - READ UNCOMMITTED: không ngăn gì.  
+  - READ COMMITTED: ngăn **dirty read**.  
+  - REPEATABLE READ: ngăn **dirty + non-repeatable read** (phantom tùy engine).  
+  - SERIALIZABLE: ngăn cả **phantom** (gần như serialize).
+- [x] Đọc về "MVCC" (Multi-Version Concurrency Control) - how it works
+  - Lưu nhiều version row, mỗi transaction đọc snapshot phù hợp với timestamp của nó; giảm cần lock read, cho phép read không block write (và ngược lại) trong đa số case.
+- [x] Đọc về "locking" - shared locks, exclusive locks
+  - **Shared (read)**: nhiều reader cùng nắm được, block writer.  
+  - **Exclusive (write)**: 1 writer, block reader khác; lock scope có thể là row/page/table tùy engine và query.
+- [x] Đọc về "deadlock" - what causes it? How to prevent?
+  - Xảy ra khi 2+ transactions giữ lock A, chờ lock B của nhau; prevention: thứ tự truy cập tài nguyên nhất quán, giữ transaction ngắn, index tốt để lock ít rows hơn.
+- [x] Đọc về "optimistic locking" vs "pessimistic locking"
+  - **Optimistic**: đọc version, khi update check version không đổi; tốt cho conflict ít.  
+  - **Pessimistic**: lock row ngay khi đọc để chặn concurrent writers; tốt khi conflict cao nhưng giảm concurrency.
+- [x] Research: Default isolation level trong MySQL vs PostgreSQL
+  - MySQL InnoDB: mặc định **REPEATABLE READ**; PostgreSQL: mặc định **READ COMMITTED**.
 
 ### Data Consistency vs Performance
-- [ ] Đọc về "strong consistency" - trade-offs
-- [ ] Đọc về "eventual consistency" - trade-offs
-- [ ] Đọc về "read consistency" - snapshot isolation
-- [ ] Đọc về "write consistency" - how to ensure
-- [ ] Analyze: When to sacrifice consistency for performance?
-- [ ] Analyze: When MUST have strong consistency?
-- [ ] Đọc về "distributed transactions" - 2PC, performance impact
+- [x] Đọc về "strong consistency" - trade-offs
+  - Mọi read sau write đều thấy dữ liệu mới (theo 1 model rõ ràng); thường cần coordination mạnh, lock nhiều hơn, latency cao hơn, khó scale.
+- [x] Đọc về "eventual consistency" - trade-offs
+  - Cho phép node/replica khác nhau tạm thời thấy state khác nhau, miễn là rồi sẽ converge; dễ scale, latency thấp hơn, nhưng app phải chấp nhận và xử lý **stale reads**.
+- [x] Đọc về "read consistency" - snapshot isolation
+  - Snapshot isolation dùng MVCC để mỗi transaction đọc 1 snapshot nhất quán của DB, không thấy half-committed state, giảm lock giữa readers và writers.
+- [x] Đọc về "write consistency" - how to ensure
+  - Dùng transaction đúng chỗ, constraints ở DB (FK, UNIQUE, CHECK), idempotent operations, và nếu distributed thì cần protocol đảm bảo commit đồng bộ.
+- [x] Analyze: When to sacrifice consistency for performance?
+  - Khi dữ liệu **không critical** (likes, views, feed ordering), chấp nhận đọc hơi cũ nhưng đổi lại throughput/latency tốt hơn, hoặc trong hệ thống phân tán multi-region.
+- [x] Analyze: When MUST have strong consistency?
+  - Số dư wallet, chuyển tiền, đơn hàng thanh toán, quyền truy cập/security, hoặc bất kỳ thứ gì mà state sai 1 lần là gây mất tiền/tổn hại lớn.
+- [x] Đọc về "distributed transactions" - 2PC, performance impact
+  - **2-phase commit** đảm bảo atomic commit giữa nhiều resource managers, nhưng thêm coordinator, nhiều round-trip, dễ thành bottleneck và có risk blocking nếu coordinator chết; thường tránh cho high-throughput path, ưu tiên design **saga/eventual consistency** nếu phù hợp.
 
 ---
 
