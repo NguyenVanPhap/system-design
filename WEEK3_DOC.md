@@ -315,25 +315,85 @@
   DB hiện đại (MySQL 8, PostgreSQL) không chỉ lưu:
 
     * number of distinct
-    * total rows
+        * total rows
 
   Mà còn lưu **histogram**:
 
   → Phân bố tần suất giá trị
 
-  Ví dụ histogram sẽ biết:
+  ### 📊 Ví dụ cụ thể với số liệu:
 
-    * SUCCESS = 98%
-    * FAILED = 1%
-    * PENDING = 1%
+  **Bảng `orders` có 1,000,000 rows:**
 
-  Nên optimizer tính được:
+  | status  | Số rows | Tỷ lệ |
+  |---------|---------|-------|
+  | SUCCESS | 980,000 | 98%   |
+  | FAILED  | 10,000  | 1%    |
+  | PENDING | 10,000  | 1%    |
+  | **Tổng** | **1,000,000** | **100%** |
 
-    ```
-    selectivity(status = 'PENDING') ≈ 0.01
-    ```
+  ### 🔢 Cách tính Selectivity:
 
-  Chứ không dùng 1/3.
+  **❌ Cách tính CŨ (không dùng histogram):**
+  ```
+  Selectivity = distinct_values / total_rows
+             = 3 / 1,000,000
+             = 0.000003
+  ```
+  → Rất thấp! Optimizer nghĩ index không hiệu quả.
+
+  **Nhưng cách này SAI vì:**
+  - Giả định mỗi giá trị có số rows bằng nhau
+  - Nghĩa là: SUCCESS = 333,333 rows, FAILED = 333,333 rows, PENDING = 333,333 rows
+  - **Nhưng thực tế không phải vậy!**
+
+  **✅ Cách tính MỚI (dùng histogram):**
+
+  Histogram lưu **phân bố thực tế**:
+  ```
+  SUCCESS = 98% (980,000 rows)
+  FAILED  = 1%  (10,000 rows)
+  PENDING = 1%  (10,000 rows)
+  ```
+
+  Khi query `WHERE status = 'PENDING'`:
+  ```
+  Selectivity = số rows PENDING / total_rows
+             = 10,000 / 1,000,000
+             = 0.01
+             = 1%
+  ```
+
+  **So sánh:**
+  - ❌ Cách cũ: Selectivity = 0.000003 (nghĩ là rất thấp, không nên dùng index)
+  - ✅ Cách mới: Selectivity = 0.01 (1% - đủ cao để dùng index hiệu quả!)
+
+  ### 💡 Tại sao quan trọng?
+
+  **Query:**
+  ```sql
+  SELECT * FROM orders WHERE status = 'PENDING';
+  ```
+
+  **Với cách tính cũ (không có histogram):**
+  - Optimizer nghĩ: "Có 3 giá trị, mỗi giá trị ~333k rows"
+  - Estimate: Query sẽ trả về ~333,333 rows (33%)
+  - Quyết định: "Quá nhiều rows, không nên dùng index, full table scan tốt hơn"
+  - ❌ **Sai!** Thực tế chỉ có 10,000 rows (1%)
+
+  **Với histogram:**
+  - Optimizer biết: "PENDING chỉ có 1% rows"
+  - Estimate: Query sẽ trả về ~10,000 rows (1%)
+  - Quyết định: "Ít rows, nên dùng index"
+  - ✅ **Đúng!** Index sẽ rất hiệu quả
+
+  ### 🎯 Kết luận:
+
+  **Selectivity thực tế = số rows match / total_rows**
+
+  Không phải = distinct_values / total_rows
+
+  Histogram giúp optimizer biết **phân bố thực tế** của từng giá trị, không phải giả định đều nhau.
     
   ---
 
