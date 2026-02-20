@@ -72,9 +72,14 @@
 
 ### Indexing Deep Dive
 - [ ] Đọc về "B-tree index" - how it works internally
+  - Cấu trúc cây cân bằng nhiều nhánh với keys được sắp được sắp xếp trong nodes, lookup/insert/delete đều là O(log(n)) vì chiều cao của cây thấp và có cơ chế tự re-balance.
 - [ ] Đọc về "Hash index" - use cases và limitations
+  - Dùng Hash(key) --> bucket nên rất tốt cho equality lookup, nhưng không hỗ trợ range scan, order by hay prefix search
 - [ ] Đọc về "Composite index" - column order matters
+  - Index (A,B,C) hữu dụng cho điều kiện bắt đầu từ trái A, (A,B) , (A,B,C), nếu chỉ filter bằng B hoặc C thì không tận dụng được index
 - [ ] Viết notes: Index selectivity - what is it? Why important?
+  - selectivity = distinct_values/total_row, càng gần 1 càng thôi
+  - 
 - [ ] Đọc về "covering index" - index-only scans
 - [ ] Đọc về "partial index" - conditional indexes
 - [ ] Đọc về "unique index" vs "non-unique index" - performance difference
