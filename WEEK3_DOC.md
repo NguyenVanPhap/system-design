@@ -237,8 +237,204 @@
   Ví dụ:
 
     * `status = 'PENDING'` chiếm 1% thôi → dù distinct = 3 nhưng vẫn rất selective.
+      Đoạn này là phần “nâng cao” của selectivity — và rất hay bị hỏi trong interview senior 😄
+      Mình giải thích từng ý theo hướng thực tế DB engine (MySQL / PostgreSQL).
 
-Bạn đang đọc đến đoạn nào trong tài liệu vậy?
+    ---
+
+  # 1️⃣ Vấn đề của công thức selectivity cơ bản
+
+  Công thức bạn đọc:
+
+    ```
+    selectivity = distinct_values / total_rows
+    ```
+
+  Công thức này **giả định dữ liệu phân bố đều (uniform distribution)**.
+
+  Nhưng ngoài đời gần như KHÔNG BAO GIỜ đều.
+    
+  ---
+
+  # 2️⃣ Distribution Skew (Phân bố lệch)
+
+  Ví dụ bảng 1,000,000 rows:
+
+  | status  | count   |
+        | ------- | ------- |
+  | SUCCESS | 980,000 |
+  | FAILED  | 10,000  |
+  | PENDING | 10,000  |
+
+  Distinct = 3
+  Selectivity theo công thức = 3 / 1,000,000 = rất thấp ❌
+
+  Nhưng query:
+
+    ```sql
+    WHERE status = 'PENDING'
+    ```
+
+  → chỉ trả 1% rows
+  → thực tế rất selective
+  → index có giá trị
+
+  💡 Đây gọi là **skewed distribution**.
+    
+  ---
+
+  # 3️⃣ Histogram Statistics là gì?
+
+  DB hiện đại (MySQL 8, PostgreSQL) không chỉ lưu:
+
+    * number of distinct
+        * total rows
+
+  Mà còn lưu **histogram**:
+
+  → Phân bố tần suất giá trị
+
+  Ví dụ histogram sẽ biết:
+
+    * SUCCESS = 98%
+        * FAILED = 1%
+        * PENDING = 1%
+
+  Nên optimizer tính được:
+
+    ```
+    selectivity(status = 'PENDING') ≈ 0.01
+    ```
+
+  Chứ không dùng 1/3.
+    
+  ---
+
+  # 4️⃣ Correlation giữa columns
+
+  Giả sử:
+
+    ```sql
+    WHERE country = 'VN'
+    AND city = 'HCM'
+    ```
+
+  Nếu optimizer nghĩ:
+
+    * country selectivity = 10%
+        * city selectivity = 5%
+
+  Nó có thể tính sai:
+
+    ```
+    0.1 × 0.05 = 0.005 (0.5%)
+    ```
+
+  Nhưng thực tế:
+
+    * HCM gần như luôn thuộc VN
+
+  → 2 điều kiện có correlation cao
+  → không độc lập
+
+  Nếu DB không biết correlation → estimate sai → chọn plan sai.
+
+  PostgreSQL hỗ trợ extended statistics để xử lý correlation tốt hơn.
+    
+  ---
+
+  # 5️⃣ Cost Model (I/O vs CPU)
+
+  Optimizer không hỏi:
+
+  > Index có selective không?
+
+  Mà hỏi:
+
+  > Dùng index có rẻ hơn full scan không?
+
+  Nó tính:
+
+    ```
+    Total cost = I/O cost + CPU cost
+    ```
+
+  Ví dụ:
+
+    * status = SUCCESS (98%)
+      → index scan phải đọc 980k rows
+      → random I/O nhiều
+      → full table scan có thể rẻ hơn
+
+  → optimizer bỏ index
+    
+  ---
+
+  # 6️⃣ Vì sao `distinct=3` nhưng vẫn selective?
+
+  Quay lại ví dụ:
+
+  status có 3 giá trị
+  distinct thấp
+  → theo công thức basic → low selectivity
+
+  Nhưng nếu phân bố lệch:
+
+    ```
+    PENDING = 1%
+    ```
+
+  Thì:
+
+    ```
+    selectivity(status='PENDING') = 0.01
+    ```
+
+  Không còn là 1/3 nữa.
+
+  💡 Selectivity thực sự là theo VALUE cụ thể, không phải theo column chung chung.
+    
+  ---
+
+  # 7️⃣ Tổng hợp lại
+
+  Optimizer hiện đại xem:
+
+    1. Table row count
+    2. Distinct values
+    3. Histogram (frequency distribution)
+    4. Correlation giữa columns
+    5. Cost model (I/O vs CPU)
+    6. Index structure (B-tree depth, clustering…)
+
+  Chứ không chỉ mỗi distinct/rows.
+    
+  ---
+
+  # 8️⃣ Thực tế production (quan trọng)
+
+  Trong hệ thống dữ liệu lớn như affiliate/reporting:
+
+    * Data skew rất phổ biến
+    * 1 vài status chiếm gần hết
+    * 1 vài status hiếm
+
+  Nếu statistics outdated:
+
+    * Optimizer estimate sai
+    * Query plan tệ
+    * Query đột nhiên chậm
+
+  Nên phải:
+    
+    ```
+    ANALYZE TABLE
+    ```
+
+  hoặc auto-vacuum / auto-analyze (Postgres).
+    
+  ---
+
 
 - [x] Đọc về "covering index" - index-only scans
     - Index chứa **tất cả columns** mà query cần → engine chỉ đọc index, không phải quay lại table (**index-only scan
