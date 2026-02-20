@@ -257,9 +257,9 @@
   Optimizer còn xem:
 
     * Distribution skew
-        * Histogram statistics
-        * Correlation giữa columns
-        * Cost model (I/O vs CPU)
+    * Histogram statistics
+    * Correlation giữa columns
+    * Cost model (I/O vs CPU)
 
   Ví dụ:
 
@@ -288,7 +288,7 @@
   Ví dụ bảng 1,000,000 rows:
 
   | status  | count   |
-        | ------- | ------- |
+  | ------- | ------- |
   | SUCCESS | 980,000 |
   | FAILED  | 10,000  |
   | PENDING | 10,000  |
@@ -315,7 +315,7 @@
   DB hiện đại (MySQL 8, PostgreSQL) không chỉ lưu:
 
     * number of distinct
-        * total rows
+    * total rows
 
   Mà còn lưu **histogram**:
 
@@ -324,8 +324,8 @@
   Ví dụ histogram sẽ biết:
 
     * SUCCESS = 98%
-        * FAILED = 1%
-        * PENDING = 1%
+    * FAILED = 1%
+    * PENDING = 1%
 
   Nên optimizer tính được:
 
@@ -349,7 +349,7 @@
   Nếu optimizer nghĩ:
 
     * country selectivity = 10%
-        * city selectivity = 5%
+    * city selectivity = 5%
 
   Nó có thể tính sai:
 
