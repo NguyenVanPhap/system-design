@@ -99,16 +99,43 @@
 
   ## 1️⃣ Selectivity là gì?
 
-  **Selectivity = distinct_values / total_rows**
+  **Selectivity** (độ chọn lọc) là một metric đo lường khả năng một index có thể **lọc bớt** số lượng rows cần phải scan khi thực thi query.
 
-  Ví dụ bảng `users` có 1,000,000 rows:
+  ### 📐 Công thức cơ bản:
 
-  | Column    | Distinct values | Selectivity |
-        |-----------|-----------------|-------------|
-  | `user_id` | 1,000,000       | 1.0         |
-  | `email`   | 1,000,000       | 1.0         |
-  | `gender`  | 2               | 0.000002    |
-  | `status`  | 3               | 0.000003    |
+  ```
+  Selectivity = distinct_values / total_rows
+  ```
+
+  **Giá trị selectivity:**
+  - **Càng gần 1.0** → càng tốt (gần như unique, mỗi giá trị chỉ xuất hiện 1 lần)
+  - **Càng gần 0** → càng kém (nhiều rows có cùng giá trị, index ít hiệu quả)
+
+  ### 📊 Ví dụ cụ thể:
+
+  Bảng `users` có **1,000,000 rows**:
+
+  | Column    | Distinct values | Selectivity | Đánh giá |
+  |-----------|-----------------|-------------|----------|
+  | `user_id` | 1,000,000       | 1.0         | ✅ Tuyệt vời - unique |
+  | `email`   | 1,000,000       | 1.0         | ✅ Tuyệt vời - unique |
+  | `phone`   | 950,000         | 0.95        | ✅ Rất tốt |
+  | `country` | 50              | 0.00005     | ⚠️ Thấp - mỗi nước có ~20k users |
+  | `gender`  | 2               | 0.000002    | ❌ Rất thấp - ~500k rows mỗi giá trị |
+  | `status`  | 3               | 0.000003    | ❌ Rất thấp - ~333k rows mỗi giá trị |
+
+  ### 💡 Tại sao selectivity quan trọng?
+
+  Selectivity quyết định **index có đáng để tạo hay không**:
+
+  - **High selectivity (0.1 - 1.0)**: Index rất hiệu quả, giúp query nhanh đáng kể
+  - **Medium selectivity (0.01 - 0.1)**: Index có thể hữu ích, nhưng cần đánh giá kỹ
+  - **Low selectivity (< 0.01)**: Index thường không hiệu quả, có thể bị optimizer bỏ qua
+
+  ### 🎯 Rule of thumb:
+
+  - **Selectivity > 0.1**: Nên tạo index nếu column thường xuyên xuất hiện trong WHERE
+  - **Selectivity < 0.01**: Thường không nên index riêng lẻ, nhưng có thể dùng trong composite index
     
   ---
 
@@ -439,27 +466,1167 @@
 - [x] Đọc về "covering index" - index-only scans
     - Index chứa **tất cả columns** mà query cần → engine chỉ đọc index, không phải quay lại table (**index-only scan
       **), giảm I/O và latency.
+
+    ### 🎯 Covering Index là gì?
+
+    **Covering index** là index chứa **TẤT CẢ** các columns mà query cần, bao gồm:
+    - Columns trong WHERE clause (để filter)
+    - Columns trong SELECT clause (để trả về)
+    - Columns trong ORDER BY/GROUP BY (nếu có)
+
+    Khi index "cover" toàn bộ query → Database engine chỉ cần đọc **index pages**, không cần quay lại **table pages** → giảm I/O đáng kể.
+
+    ### 📊 Ví dụ cụ thể:
+
+    **Bảng `orders` (10M rows):**
+    ```sql
+    CREATE TABLE orders (
+        id BIGINT PRIMARY KEY,
+        user_id BIGINT,
+        status VARCHAR(20),
+        amount DECIMAL(10,2),
+        created_at TIMESTAMP,
+        -- ... nhiều columns khác
+    );
+    ```
+
+    **Query thường xuyên:**
+    ```sql
+    SELECT user_id, status, amount
+    FROM orders
+    WHERE user_id = 12345
+    AND status = 'PENDING';
+    ```
+
+    **❌ Index không covering:**
+    ```sql
+    CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+    ```
+    - Index chỉ có `user_id, status` → phải quay lại table để lấy `amount`
+    - Mỗi row match → 1 random I/O để đọc table page
+    - Với 100 rows match → 100 random I/Os
+
+    **✅ Index covering:**
+    ```sql
+    CREATE INDEX idx_orders_user_status_amount ON orders(user_id, status, amount);
+    ```
+    - Index có đủ `user_id, status, amount` → **index-only scan**
+    - Không cần quay lại table
+    - Chỉ đọc index pages (sequential I/O) → nhanh hơn 10-100x
+
+    ### 💡 Lợi ích của Covering Index:
+
+    1. **Giảm I/O**: Không cần đọc table pages
+    2. **Giảm latency**: Sequential read index thay vì random read table
+    3. **Giảm lock contention**: Ít phải lock table pages
+    4. **Tăng throughput**: Đặc biệt quan trọng với read-heavy workload
+
+    ### ⚠️ Trade-offs:
+
+    - **Index size lớn hơn**: Thêm columns vào index → index chiếm nhiều disk/RAM hơn
+    - **Write overhead**: Mỗi INSERT/UPDATE phải update nhiều columns trong index
+    - **Maintenance cost**: Index lớn → rebuild/reorganize tốn thời gian hơn
+
+    ### 🎯 Khi nào nên dùng Covering Index?
+
+    ✅ **Nên dùng khi:**
+    - Query được gọi rất thường xuyên (hot path)
+    - Table có nhiều columns nhưng query chỉ cần vài columns
+    - Read-heavy workload (nhiều SELECT, ít UPDATE)
+    - Query performance là bottleneck
+
+    ❌ **Không nên dùng khi:**
+    - Query không được gọi thường xuyên
+    - Write-heavy workload (nhiều INSERT/UPDATE)
+    - Index quá lớn (vượt quá RAM available)
+    - Columns trong SELECT thay đổi thường xuyên
+
+    ### 🔍 Cách kiểm tra Covering Index:
+
+    **MySQL:**
+    ```sql
+    EXPLAIN SELECT user_id, status, amount 
+    FROM orders 
+    WHERE user_id = 12345;
+    ```
+    - Nếu thấy `Extra: Using index` → đây là covering index!
+
+    **PostgreSQL:**
+    ```sql
+    EXPLAIN (ANALYZE, BUFFERS) 
+    SELECT user_id, status, amount 
+    FROM orders 
+    WHERE user_id = 12345;
+    ```
+    - Nếu thấy `Index Only Scan` → covering index đang được dùng
 - [x] Đọc về "partial index" - conditional indexes
     - Index chỉ tạo trên subset rows với `WHERE` (vd: `status = 'PENDING'`) → index nhỏ, tập trung cho hot subset, giảm
       overhead write.
+
+    ### 🎯 Partial Index là gì?
+
+    **Partial index** (hay **filtered index**, **conditional index**) là index chỉ được tạo trên **một phần** của bảng, dựa trên điều kiện WHERE.
+
+    Thay vì index toàn bộ rows → chỉ index những rows thỏa mãn điều kiện → index nhỏ hơn, nhanh hơn, ít overhead hơn.
+
+    ### 📊 Ví dụ cụ thể:
+
+    **Bảng `orders` (10M rows):**
+    ```sql
+    CREATE TABLE orders (
+        id BIGINT PRIMARY KEY,
+        user_id BIGINT,
+        status VARCHAR(20),  -- PENDING, COMPLETED, CANCELLED
+        amount DECIMAL(10,2),
+        created_at TIMESTAMP
+    );
+    ```
+
+    **Phân bố dữ liệu:**
+    - `PENDING`: 50,000 rows (0.5%) - cần query thường xuyên
+    - `COMPLETED`: 9,500,000 rows (95%)
+    - `CANCELLED`: 450,000 rows (4.5%)
+
+    **Query thường xuyên:**
+    ```sql
+    SELECT * FROM orders 
+    WHERE status = 'PENDING' 
+    AND created_at > '2024-01-01'
+    ORDER BY created_at;
+    ```
+
+    **❌ Full index (không hiệu quả):**
+    ```sql
+    CREATE INDEX idx_orders_status_created ON orders(status, created_at);
+    ```
+    - Index 10M rows
+    - Chỉ 0.5% rows (PENDING) được query
+    - 99.5% index entries không bao giờ được dùng
+    - Tốn disk, RAM, và write overhead
+
+    **✅ Partial index (hiệu quả):**
+    ```sql
+    -- PostgreSQL
+    CREATE INDEX idx_orders_pending_created 
+    ON orders(created_at) 
+    WHERE status = 'PENDING';
+
+    -- SQL Server
+    CREATE INDEX idx_orders_pending_created 
+    ON orders(created_at) 
+    WHERE status = 'PENDING';
+    ```
+    - Index chỉ 50,000 rows (0.5% của bảng)
+    - Nhỏ hơn 200x so với full index
+    - Query nhanh hơn vì index nhỏ
+    - Write overhead giảm đáng kể
+
+    ### 💡 Lợi ích của Partial Index:
+
+    1. **Index size nhỏ**: Chỉ index subset rows → tiết kiệm disk/RAM
+    2. **Query nhanh hơn**: Index nhỏ → scan nhanh hơn
+    3. **Write overhead thấp**: Chỉ update index khi row thỏa điều kiện
+    4. **Maintenance nhanh**: Rebuild/reorganize index nhỏ nhanh hơn nhiều
+
+    ### 📋 Use Cases phổ biến:
+
+    **1. Index cho "active" records:**
+    ```sql
+    -- Chỉ index các orders đang pending
+    CREATE INDEX idx_orders_pending 
+    ON orders(user_id, created_at) 
+    WHERE status = 'PENDING';
+    ```
+
+    **2. Index cho "recent" data:**
+    ```sql
+    -- Chỉ index data trong 30 ngày gần nhất
+    CREATE INDEX idx_orders_recent 
+    ON orders(user_id) 
+    WHERE created_at > CURRENT_DATE - INTERVAL '30 days';
+    ```
+
+    **3. Index cho "non-null" values:**
+    ```sql
+    -- Chỉ index rows có email (bỏ qua NULL)
+    CREATE INDEX idx_users_email 
+    ON users(email) 
+    WHERE email IS NOT NULL;
+    ```
+
+    **4. Index cho "specific value":**
+    ```sql
+    -- Chỉ index các transactions failed (để audit)
+    CREATE INDEX idx_transactions_failed 
+    ON transactions(created_at) 
+    WHERE status = 'FAILED';
+    ```
+
+    ### ⚠️ Lưu ý quan trọng:
+
+    - **MySQL không hỗ trợ** partial index trực tiếp (chỉ PostgreSQL, SQL Server, Oracle)
+    - **MySQL workaround**: Dùng generated column + index:
+      ```sql
+      ALTER TABLE orders 
+      ADD COLUMN is_pending TINYINT(1) 
+      GENERATED ALWAYS AS (status = 'PENDING') STORED;
+      
+      CREATE INDEX idx_orders_pending ON orders(created_at) WHERE is_pending = 1;
+      ```
+      (Lưu ý: MySQL 8.0+ mới hỗ trợ functional index với WHERE)
+
+    - **Query phải match điều kiện**: Query phải có điều kiện giống WHERE clause của index, nếu không optimizer không dùng index
+
+    ### 🎯 Khi nào nên dùng Partial Index?
+
+    ✅ **Nên dùng khi:**
+    - Chỉ query một subset nhỏ của bảng (vd: status = 'PENDING')
+    - Subset này được query rất thường xuyên
+    - Bảng lớn nhưng chỉ một phần nhỏ là "hot"
+    - Muốn giảm index size và write overhead
+
+    ❌ **Không nên dùng khi:**
+    - Query nhiều giá trị khác nhau của column
+    - Subset quá lớn (> 50% rows)
+    - Điều kiện WHERE thay đổi thường xuyên
 - [x] Đọc về "unique index" vs "non-unique index" - performance difference
     - Unique index enforce uniqueness và cho phép optimizer giả định tối đa 1 row match, đôi khi cho plan tốt hơn; nhưng
       mọi write phải check unique constraint → thêm chút overhead.
+
+    ### 🎯 Unique Index vs Non-Unique Index
+
+    **Unique Index** đảm bảo không có 2 rows nào có cùng giá trị cho column(s) được index. Ngoài việc enforce uniqueness, nó còn có những khác biệt về performance so với non-unique index.
+
+    ### 📊 So sánh chi tiết:
+
+    | Tiêu chí | Unique Index | Non-Unique Index |
+    |----------|--------------|------------------|
+    | **Uniqueness** | ✅ Enforce (không cho phép duplicate) | ❌ Cho phép duplicate |
+    | **Selectivity** | Luôn = 1.0 (hoặc gần 1.0) | Có thể < 1.0 |
+    | **Query optimization** | Optimizer biết chắc chỉ có 0-1 row match | Optimizer phải estimate số rows |
+    | **Lookup performance** | Có thể dừng sớm khi tìm thấy 1 row | Phải scan hết nếu có duplicate |
+    | **Write overhead** | Phải check uniqueness (thêm I/O) | Không cần check uniqueness |
+    | **Storage** | Tương tự non-unique | Tương tự unique |
+
+    ### 💡 Performance Differences:
+
+    **1. Query Optimization:**
+
+    **Unique Index:**
+    ```sql
+    -- Unique index trên email
+    CREATE UNIQUE INDEX idx_users_email ON users(email);
+
+    SELECT * FROM users WHERE email = 'user@example.com';
+    ```
+    - Optimizer **biết chắc** chỉ có tối đa 1 row
+    - Có thể chọn plan tối ưu hơn (vd: không cần sort nếu đã có 1 row)
+    - Có thể dừng scan ngay khi tìm thấy 1 row
+
+    **Non-Unique Index:**
+    ```sql
+    -- Non-unique index trên status
+    CREATE INDEX idx_orders_status ON orders(status);
+
+    SELECT * FROM orders WHERE status = 'PENDING';
+    ```
+    - Optimizer phải **estimate** số rows (có thể hàng nghìn)
+    - Phải scan hết tất cả rows match
+    - Plan có thể kém tối ưu hơn
+
+    **2. JOIN Performance:**
+
+    **Unique Index (Foreign Key):**
+    ```sql
+    -- users.id là PRIMARY KEY (unique)
+    SELECT o.*, u.name 
+    FROM orders o
+    JOIN users u ON o.user_id = u.id;
+    ```
+    - Optimizer biết mỗi `user_id` chỉ match 1 row trong `users`
+    - Có thể chọn nested loop join hiệu quả
+    - Không cần build hash table lớn
+
+    **Non-Unique Index:**
+    ```sql
+    -- status không unique
+    SELECT o1.*, o2.*
+    FROM orders o1
+    JOIN orders o2 ON o1.status = o2.status;
+    ```
+    - Optimizer phải estimate cardinality
+    - Có thể chọn hash join thay vì nested loop
+    - Performance kém hơn nếu estimate sai
+
+    **3. Write Overhead:**
+
+    **Unique Index:**
+    ```sql
+    INSERT INTO users (email, name) VALUES ('new@example.com', 'New User');
+    ```
+    - Phải **check uniqueness** trước khi insert
+    - Thêm 1 index lookup để verify không có duplicate
+    - Nếu có duplicate → error, rollback
+    - **Overhead**: +1 index read per write
+
+    **Non-Unique Index:**
+    ```sql
+    INSERT INTO orders (status, amount) VALUES ('PENDING', 100);
+    ```
+    - Không cần check uniqueness
+    - Chỉ cần insert vào index
+    - **Overhead**: Chỉ 1 index write
+
+    ### 📋 Ví dụ thực tế:
+
+    **Scenario: Email lookup**
+
+    ```sql
+    -- Unique index
+    CREATE UNIQUE INDEX idx_users_email ON users(email);
+    
+    -- Query
+    SELECT id, name FROM users WHERE email = 'user@example.com';
+    ```
+
+    **Execution với Unique Index:**
+    1. Index seek đến `email = 'user@example.com'`
+    2. Tìm thấy 1 row → **dừng ngay**
+    3. Trả về kết quả
+    4. **Total I/O**: 2-3 pages (index root → leaf → table
+
+    **Execution với Non-Unique Index (giả sử):**
+    1. Index seek đến `email = 'user@example.com'`
+    2. Phải scan tiếp để tìm tất cả rows match (dù chỉ có 1)
+    3. Trả về kết quả
+    4. **Total I/O**: 3-4 pages (nhiều hơn một chút)
+
+    ### ⚠️ Trade-offs:
+
+    **Unique Index:**
+    - ✅ Query nhanh hơn (optimizer biết chắc 1 row)
+    - ✅ Data integrity (không có duplicate)
+    - ❌ Write chậm hơn (phải check uniqueness)
+    - ❌ Không thể insert duplicate (có thể là feature hoặc bug tùy use case)
+
+    **Non-Unique Index:**
+    - ✅ Write nhanh hơn (không cần check)
+    - ✅ Cho phép duplicate (linh hoạt hơn)
+    - ❌ Query có thể chậm hơn (phải scan nhiều rows)
+    - ❌ Không đảm bảo data integrity
+
+    ### 🎯 Best Practices:
+
+    1. **Dùng Unique Index khi:**
+       - Column phải unique (email, phone, SSN)
+       - Query thường xuyên lookup by unique value
+       - Data integrity là ưu tiên
+
+    2. **Dùng Non-Unique Index khi:**
+       - Column có thể có duplicate (status, category)
+       - Write performance quan trọng hơn
+       - Cần linh hoạt cho phép duplicate
+
+    3. **Primary Key:**
+       - Luôn là unique index (implicit)
+       - Tốt nhất cho lookup performance
+       - Nên dùng cho foreign key references
 - [x] Đọc về "index maintenance" - INSERT/UPDATE/DELETE overhead
     - Mỗi thay đổi dữ liệu phải update **tất cả indexes liên quan**; nhiều index → write cost tăng (CPU + I/O), đặc biệt
       trên bảng lớn.
+
+    ### 🎯 Index Maintenance là gì?
+
+    **Index maintenance** là quá trình database engine tự động **cập nhật index** mỗi khi có thay đổi dữ liệu (INSERT, UPDATE, DELETE). Đây là overhead không thể tránh khỏi khi dùng index.
+
+    ### 📊 Chi phí của Index Maintenance:
+
+    **Mỗi index = 1 cây B-tree riêng** → mỗi thay đổi data phải update tất cả indexes liên quan.
+
+    **Ví dụ bảng `orders` có 5 indexes:**
+    ```sql
+    CREATE TABLE orders (
+        id BIGINT PRIMARY KEY,           -- Index 1: PRIMARY KEY
+        user_id BIGINT,                  -- Index 2: idx_orders_user
+        status VARCHAR(20),              -- Index 3: idx_orders_status
+        created_at TIMESTAMP,            -- Index 4: idx_orders_created
+        -- Composite index
+        INDEX idx_orders_user_status (user_id, status)  -- Index 5
+    );
+    ```
+
+    **Khi INSERT 1 row mới:**
+    ```
+    1. Insert row vào table          → 1 write
+    2. Update PRIMARY KEY index      → 1 write
+    3. Update idx_orders_user       → 1 write
+    4. Update idx_orders_status      → 1 write
+    5. Update idx_orders_created     → 1 write
+    6. Update idx_orders_user_status → 1 write
+    ──────────────────────────────────────────
+    Total: 6 writes (1 table + 5 indexes)
+    ```
+
+    **Khi UPDATE `status`:**
+    ```
+    1. Update row trong table                    → 1 write
+    2. Update idx_orders_status (delete old)     → 1 write
+    3. Update idx_orders_status (insert new)     → 1 write
+    4. Update idx_orders_user_status (delete)    → 1 write
+    5. Update idx_orders_user_status (insert)     → 1 write
+    ────────────────────────────────────────────────────
+    Total: 5 writes (1 table + 4 index updates)
+    ```
+
+    **Khi DELETE 1 row:**
+    ```
+    1. Delete row từ table          → 1 write
+    2. Delete từ PRIMARY KEY        → 1 write
+    3. Delete từ idx_orders_user   → 1 write
+    4. Delete từ idx_orders_status  → 1 write
+    5. Delete từ idx_orders_created → 1 write
+    6. Delete từ composite index     → 1 write
+    ──────────────────────────────────────────
+    Total: 6 writes (1 table + 5 indexes)
+    ```
+
+    ### 💡 Impact thực tế:
+
+    **Bảng nhỏ (< 1M rows):**
+    - Overhead nhỏ, không đáng kể
+    - 5-10 indexes vẫn OK
+
+    **Bảng lớn (10M+ rows):**
+    - Mỗi index update = random I/O
+    - 10 indexes → 10x write overhead
+    - Có thể làm INSERT chậm 10-50x so với không có index
+
+    **High-write workload:**
+    - Nhiều indexes → bottleneck ở disk I/O
+    - Có thể cần SSD để đảm bảo performance
+    - Hoặc giảm số lượng indexes
+
+    ### 📋 Các yếu tố ảnh hưởng Index Maintenance Cost:
+
+    **1. Số lượng indexes:**
+    - Mỗi index = thêm 1 write per operation
+    - 10 indexes → 10x overhead so với 1 index
+
+    **2. Index size:**
+    - Index lớn → B-tree sâu hơn → nhiều pages phải update
+    - Composite index với nhiều columns → lớn hơn → chậm hơn
+
+    **3. Index type:**
+    - **Clustered index (PK)**: Update nhanh hơn (data và index cùng chỗ)
+    - **Non-clustered index**: Update chậm hơn (phải tìm row trong table)
+
+    **4. Update pattern:**
+    - **Update indexed column**: Phải update index (delete + insert)
+    - **Update non-indexed column**: Không cần update index
+
+    **5. Fragmentation:**
+    - Index bị fragmented → update chậm hơn
+    - Cần rebuild/reorganize định kỳ
+
+    ### ⚠️ Trade-offs:
+
+    **Nhiều indexes:**
+    - ✅ Query nhanh hơn (nhiều access paths)
+    - ❌ Write chậm hơn (nhiều index phải update)
+    - ❌ Tốn disk/RAM (mỗi index chiếm space)
+    - ❌ Maintenance phức tạp hơn
+
+    **Ít indexes:**
+    - ✅ Write nhanh hơn
+    - ✅ Tiết kiệm disk/RAM
+    - ❌ Query có thể chậm (phải full scan)
+    - ❌ Ít access paths
+
+    ### 🎯 Best Practices để giảm Index Maintenance Cost:
+
+    **1. Chỉ tạo index cần thiết:**
+    ```sql
+    -- ❌ Không nên: Index mọi column
+    CREATE INDEX idx_orders_col1 ON orders(col1);
+    CREATE INDEX idx_orders_col2 ON orders(col2);
+    CREATE INDEX idx_orders_col3 ON orders(col3);
+    -- ... 10 indexes
+
+    -- ✅ Nên: Chỉ index columns được query thường xuyên
+    CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+    ```
+
+    **2. Dùng composite index thay vì nhiều single-column indexes:**
+    ```sql
+    -- ❌ Không hiệu quả: 2 indexes riêng
+    CREATE INDEX idx_orders_user ON orders(user_id);
+    CREATE INDEX idx_orders_status ON orders(status);
+
+    -- ✅ Hiệu quả hơn: 1 composite index
+    CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+    ```
+
+    **3. Tách bảng theo access pattern:**
+    ```sql
+    -- Hot data (thường xuyên update) → ít indexes
+    CREATE TABLE orders_hot (
+        id BIGINT PRIMARY KEY,
+        user_id BIGINT,
+        status VARCHAR(20)
+        -- Chỉ 1-2 indexes
+    );
+
+    -- Cold data (ít update, nhiều read) → nhiều indexes OK
+    CREATE TABLE orders_archive (
+        id BIGINT PRIMARY KEY,
+        user_id BIGINT,
+        status VARCHAR(20),
+        -- Có thể có nhiều indexes cho reporting
+    );
+    ```
+
+    **4. Monitor index usage:**
+    ```sql
+    -- PostgreSQL: Xem index usage
+    SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read, idx_tup_fetch
+    FROM pg_stat_user_indexes
+    WHERE idx_scan = 0;  -- Indexes không được dùng
+
+    -- MySQL: Xem index usage
+    SELECT * FROM sys.schema_unused_indexes;
+    ```
+
+    **5. Rebuild indexes định kỳ:**
+    ```sql
+    -- Giảm fragmentation → update nhanh hơn
+    -- PostgreSQL
+    REINDEX INDEX idx_orders_user_status;
+
+    -- MySQL
+    ALTER TABLE orders ENGINE=InnoDB;  -- Rebuild tất cả indexes
+    ```
+
+    ### 📊 Tính toán Index Maintenance Cost:
+
+    **Ví dụ:**
+    - Bảng: 10M rows
+    - Indexes: 5 indexes
+    - Write rate: 1000 writes/second
+
+    **Cost:**
+    - Mỗi write = 1 table write + 5 index writes = 6 writes
+    - Total: 1000 × 6 = **6,000 I/O operations/second**
+    - Nếu mỗi I/O = 1ms → **6 seconds total** (quá chậm!)
+
+    **Giải pháp:**
+    - Giảm indexes xuống 2-3 → giảm 50% overhead
+    - Dùng SSD → giảm I/O latency
+    - Batch writes → giảm số lần update
 - [x] Research: How many indexes is too many? (general rule)
     - Rule of thumb: small table: 3–5 index; medium: 5–7; large: 5–10 là đã phải rất cân nhắc; luôn dựa vào **read/write
       profile + index usage stats** để quyết.
 - [x] Đọc về "index fragmentation" - when và how to rebuild
     - Nhiều INSERT/DELETE/UPDATE gây pages rỗng/không liên tục → fragmentation, làm scan chậm.
     - Rebuild/reorganize index khi fragmentation cao (vd > ~30%) hoặc sau bulk operations lớn.
+
+    ### 🎯 Index Fragmentation là gì?
+
+    **Index fragmentation** xảy ra khi các **index pages** không còn được sắp xếp liên tục trên disk, hoặc có nhiều **empty space** trong pages do DELETE/UPDATE.
+
+    Fragmentation làm giảm performance vì:
+    - **Sequential scan** trở thành **random I/O** (phải nhảy qua nhiều pages)
+    - **Page utilization** thấp (nhiều empty space → đọc nhiều pages hơn)
+    - **Cache efficiency** giảm (ít pages fit trong buffer pool)
+
+    ### 📊 Các loại Fragmentation:
+
+    **1. External Fragmentation (Logical Fragmentation):**
+    - Index pages không liên tục trên disk
+    - Sequential scan phải nhảy qua nhiều vị trí
+    - **Impact**: Random I/O thay vì sequential I/O
+
+    **2. Internal Fragmentation (Page Density):**
+    - Pages có nhiều empty space (do DELETE)
+    - Phải đọc nhiều pages hơn để lấy cùng số rows
+    - **Impact**: Tăng I/O operations
+
+    ### 💡 Nguyên nhân Fragmentation:
+
+    **1. DELETE operations:**
+    ```sql
+    -- Xóa nhiều rows → để lại empty space trong pages
+    DELETE FROM orders WHERE status = 'CANCELLED';
+    ```
+
+    **2. UPDATE operations:**
+    ```sql
+    -- Update indexed column → delete old entry + insert new entry
+    UPDATE orders SET status = 'COMPLETED' WHERE id = 123;
+    -- Có thể làm index entries không còn sorted
+    ```
+
+    **3. Random INSERTs:**
+    ```sql
+    -- Insert với key không sequential → pages không liên tục
+    INSERT INTO orders (id, user_id) VALUES (50000, 123);
+    INSERT INTO orders (id, user_id) VALUES (100, 456);
+    INSERT INTO orders (id, user_id) VALUES (99999, 789);
+    ```
+
+    **4. Bulk operations:**
+    ```sql
+    -- Import nhiều data → pages có thể không optimal
+    LOAD DATA INFILE 'orders.csv' INTO TABLE orders;
+    ```
+
+    ### 📋 Cách đo Fragmentation:
+
+    **SQL Server:**
+    ```sql
+    SELECT 
+        OBJECT_NAME(object_id) AS TableName,
+        name AS IndexName,
+        avg_fragmentation_in_percent,
+        page_count
+    FROM sys.dm_db_index_physical_stats(
+        DB_ID(), 
+        OBJECT_ID('orders'), 
+        NULL, 
+        NULL, 
+        'DETAILED'
+    )
+    WHERE avg_fragmentation_in_percent > 30;
+    ```
+
+    **PostgreSQL:**
+    ```sql
+    -- Kiểm tra index size và bloat
+    SELECT 
+        schemaname,
+        tablename,
+        indexname,
+        pg_size_pretty(pg_relation_size(indexname::regclass)) AS index_size,
+        idx_scan AS index_scans
+    FROM pg_stat_user_indexes
+    WHERE schemaname = 'public'
+    ORDER BY pg_relation_size(indexname::regclass) DESC;
+    ```
+
+    **MySQL:**
+    ```sql
+    -- Kiểm tra index statistics
+    SHOW INDEX FROM orders;
+    
+    -- Hoặc dùng INFORMATION_SCHEMA
+    SELECT 
+        TABLE_NAME,
+        INDEX_NAME,
+        CARDINALITY,
+        INDEX_TYPE
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = 'your_database'
+    AND TABLE_NAME = 'orders';
+    ```
+
+    ### 🔧 Cách fix Fragmentation:
+
+    **1. REBUILD Index (SQL Server):**
+    ```sql
+    -- Rebuild toàn bộ index (offline, tốn thời gian)
+    ALTER INDEX idx_orders_user_status 
+    ON orders REBUILD;
+    
+    -- Hoặc rebuild tất cả indexes
+    ALTER INDEX ALL ON orders REBUILD;
+    ```
+
+    **2. REORGANIZE Index (SQL Server):**
+    ```sql
+    -- Reorganize index (online, nhanh hơn nhưng ít hiệu quả hơn)
+    ALTER INDEX idx_orders_user_status 
+    ON orders REORGANIZE;
+    ```
+
+    **3. REINDEX (PostgreSQL):**
+    ```sql
+    -- Rebuild một index
+    REINDEX INDEX idx_orders_user_status;
+    
+    -- Rebuild tất cả indexes của một table
+    REINDEX TABLE orders;
+    
+    -- Rebuild tất cả indexes của database
+    REINDEX DATABASE your_database;
+    ```
+
+    **4. OPTIMIZE TABLE (MySQL):**
+    ```sql
+    -- Rebuild table và indexes
+    OPTIMIZE TABLE orders;
+    
+    -- Hoặc rebuild index cụ thể
+    ALTER TABLE orders DROP INDEX idx_orders_user_status;
+    CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+    ```
+
+    ### ⚠️ REBUILD vs REORGANIZE:
+
+    | Tiêu chí | REBUILD | REORGANIZE |
+    |----------|---------|------------|
+    **Fragmentation threshold** | > 30% | 10-30% |
+    **Operation** | Tạo lại index từ đầu | Sắp xếp lại pages |
+    **Time** | Lâu (phút/giờ) | Nhanh (giây/phút) |
+    **Online?** | Có thể offline | Thường online |
+    **Effectiveness** | Rất hiệu quả (0% fragmentation) | Hiệu quả vừa (giảm fragmentation) |
+    **Lock** | Có thể lock table | Ít lock hơn |
+    **Disk space** | Cần 2x index size | Không cần thêm |
+
+    ### 🎯 Khi nào nên Rebuild/Reorganize?
+
+    **✅ Nên rebuild khi:**
+    - Fragmentation > 30%
+    - Sau bulk DELETE/UPDATE lớn
+    - Index performance giảm đáng kể
+    - Có maintenance window (offline OK)
+
+    **✅ Nên reorganize khi:**
+    - Fragmentation 10-30%
+    - Cần online operation (không downtime)
+    - Maintenance window ngắn
+    - Fragmentation chưa quá nghiêm trọng
+
+    **❌ Không cần rebuild khi:**
+    - Fragmentation < 10%
+    - Index ít được dùng
+    - Table nhỏ (< 100K rows)
+    - Không có performance issue
+
+    ### 📊 Best Practices:
+
+    **1. Schedule regular maintenance:**
+    ```sql
+    -- Chạy hàng tuần/tháng
+    -- SQL Server
+    ALTER INDEX ALL ON orders REORGANIZE;
+    
+    -- PostgreSQL
+    REINDEX TABLE orders;
+    ```
+
+    **2. Monitor fragmentation:**
+    - Set up alerts khi fragmentation > 30%
+    - Track index performance metrics
+    - Identify indexes cần rebuild thường xuyên
+
+    **3. Rebuild during low traffic:**
+    - Maintenance window (đêm, cuối tuần)
+    - Hoặc dùng online rebuild (nếu có)
+
+    **4. Consider fill factor (SQL Server):**
+    ```sql
+    -- Để lại 20% empty space cho future inserts
+    CREATE INDEX idx_orders_user_status 
+    ON orders(user_id, status) 
+    WITH (FILLFACTOR = 80);
+    ```
+
+    **5. Partition large tables:**
+    - Fragmentation chỉ ảnh hưởng partition cụ thể
+    - Rebuild partition nhỏ hơn rebuild cả table
 - [x] Đọc về "clustered index" vs "non-clustered index" (SQL Server) hoặc "primary key" vs "secondary index" (MySQL)
     - **Clustered/primary**: data physically sắp theo key, tốt cho range scan; chỉ có 1.
     - **Non-clustered/secondary**: cấu trúc riêng chứa key + pointer tới row/PK; có thể có nhiều.
+
+    ### 🎯 Clustered Index vs Non-Clustered Index
+
+    Đây là một trong những khái niệm quan trọng nhất về index, nhưng cách implement khác nhau giữa các database engines.
+
+    ### 📊 Cấu trúc dữ liệu:
+
+    **Clustered Index (SQL Server) / Primary Key (MySQL InnoDB):**
+    ```
+    Table data được SẮP XẾP VẬT LÝ theo index key
+    ┌─────────────────────────────────────┐
+    │ Index (B-tree)                      │
+    │ Root → Branch → Leaf                │
+    │                                     │
+    │ Leaf pages = TABLE DATA            │ ← Data và index cùng chỗ!
+    │ [Row 1] [Row 2] [Row 3] ...        │
+    └─────────────────────────────────────┘
+    ```
+
+    **Non-Clustered Index (SQL Server) / Secondary Index (MySQL):**
+    ```
+    Index và Table data TÁCH RIÊNG
+    ┌─────────────────┐    ┌─────────────────┐
+    │ Index (B-tree)  │    │ Table Data      │
+    │                 │    │                 │
+    │ Leaf:           │───→│ [Row 1]         │
+    │ Key → Pointer   │    │ [Row 2]         │
+    │                 │───→│ [Row 3]         │
+    └─────────────────┘    └─────────────────┘
+    ```
+
+    ### 💡 Khác biệt cơ bản:
+
+    | Tiêu chí | Clustered Index | Non-Clustered Index |
+    |----------|-----------------|---------------------|
+    **Số lượng** | Chỉ có 1 per table | Có thể có nhiều |
+    **Data storage** | Data được sort theo key | Data không sort, index riêng |
+    **Leaf pages** | Chứa actual row data | Chứa key + pointer (row ID/PK) |
+    **Lookup** | Direct (không cần pointer) | Indirect (phải follow pointer) |
+    **Range scan** | Rất nhanh (sequential) | Chậm hơn (random I/O) |
+    **Insert cost** | Cao (phải maintain sort order) | Thấp hơn (chỉ insert vào index) |
+    **Update key** | Rất đắt (phải move row) | Rẻ hơn (chỉ update index) |
+
+    ### 📋 Ví dụ cụ thể:
+
+    **Bảng `orders` với Clustered Index trên `id`:**
+    ```sql
+    CREATE TABLE orders (
+        id BIGINT PRIMARY KEY,        -- Clustered index
+        user_id BIGINT,
+        status VARCHAR(20),
+        amount DECIMAL(10,2),
+        created_at TIMESTAMP
+    );
+    ```
+
+    **Physical storage (simplified):**
+    ```
+    Page 1: [id=1, user_id=100, ...] [id=2, user_id=101, ...] [id=3, ...]
+    Page 2: [id=4, ...] [id=5, ...] [id=6, ...]
+    Page 3: [id=7, ...] [id=8, ...] [id=9, ...]
+    ```
+    - Rows được sắp xếp theo `id`
+    - Range scan `WHERE id BETWEEN 1 AND 100` → sequential read, rất nhanh
+
+    **Query với Clustered Index:**
+    ```sql
+    SELECT * FROM orders WHERE id = 500;
+    ```
+    1. Traverse B-tree index
+    2. Tìm đến leaf page chứa `id=500`
+    3. **Leaf page = actual row data** → trả về ngay
+    4. **Total I/O**: 2-3 pages (chỉ index traversal)
+
+    **Query với Non-Clustered Index:**
+    ```sql
+    -- Giả sử có non-clustered index trên user_id
+    SELECT * FROM orders WHERE user_id = 12345;
+    ```
+    1. Traverse B-tree index trên `user_id`
+    2. Tìm đến leaf page, thấy `user_id=12345 → row_id=500`
+    3. **Phải quay lại table** để đọc row với `id=500` (key lookup)
+    4. **Total I/O**: 3-4 pages (index + table lookup)
+
+    ### 🔍 Key Lookup (Non-Clustered Index):
+
+    **Key Lookup** là bước phải quay lại table để lấy actual row data sau khi tìm thấy trong non-clustered index.
+
+    **Ví dụ:**
+    ```sql
+    -- Non-clustered index trên (user_id, status)
+    CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+
+    -- Query
+    SELECT id, user_id, status, amount 
+    FROM orders 
+    WHERE user_id = 12345 AND status = 'PENDING';
+    ```
+
+    **Execution:**
+    1. Index seek trên `idx_orders_user_status` → tìm thấy 10 rows
+    2. **Key Lookup**: Với mỗi row, phải quay lại table để lấy `id` và `amount`
+    3. 10 rows → 10 key lookups → 10 random I/Os
+
+    **Nếu index là "covering":**
+    ```sql
+    -- Covering index (có đủ columns)
+    CREATE INDEX idx_orders_user_status_amount 
+    ON orders(user_id, status, amount);
+
+    SELECT user_id, status, amount 
+    FROM orders 
+    WHERE user_id = 12345 AND status = 'PENDING';
+    ```
+    - Không cần key lookup → **index-only scan** → nhanh hơn nhiều!
+
+    ### ⚠️ Trade-offs:
+
+    **Clustered Index:**
+    - ✅ Range scan rất nhanh (sequential I/O)
+    - ✅ Không cần key lookup
+    - ✅ Tốt cho queries thường xuyên scan theo key
+    - ❌ Chỉ có 1 clustered index
+    - ❌ Insert vào giữa table đắt (phải maintain sort order)
+    - ❌ Update key rất đắt (phải move row)
+
+    **Non-Clustered Index:**
+    - ✅ Có thể có nhiều indexes
+    - ✅ Insert nhanh hơn (không cần maintain sort)
+    - ✅ Linh hoạt hơn (index bất kỳ column nào)
+    - ❌ Cần key lookup (thêm I/O)
+    - ❌ Range scan chậm hơn (random I/O)
+
+    ### 🎯 Best Practices:
+
+    **1. Chọn Clustered Index key cẩn thận:**
+    ```sql
+    -- ✅ Tốt: Sequential, unique, không thay đổi
+    CREATE TABLE orders (
+        id BIGINT PRIMARY KEY,  -- Auto-increment, sequential
+        ...
+    );
+
+    -- ❌ Không tốt: Random, thay đổi thường xuyên
+    CREATE TABLE orders (
+        id UUID PRIMARY KEY,    -- Random UUID
+        status VARCHAR(20),      -- Thay đổi thường xuyên
+        ...
+    );
+    ```
+
+    **2. Clustered Index nên là:**
+    - **Sequential**: Auto-increment ID, timestamp
+    - **Unique**: Primary key
+    - **Stable**: Không thay đổi sau khi insert
+    - **Narrow**: INT/BIGINT thay vì VARCHAR(255)
+
+    **3. Non-Clustered Index cho:**
+    - Foreign keys (user_id, order_id)
+    - Columns thường xuyên trong WHERE
+    - Composite indexes cho specific queries
+
+    **4. Tránh update Clustered Index key:**
+    ```sql
+    -- ❌ Rất đắt: Phải move row
+    UPDATE orders SET id = 99999 WHERE id = 1;
+
+    -- ✅ Tốt hơn: Update non-key columns
+    UPDATE orders SET status = 'COMPLETED' WHERE id = 1;
+    ```
+
+    ### 📊 Database-specific Notes:
+
+    **MySQL InnoDB:**
+    - Primary key = Clustered index (luôn luôn)
+    - Nếu không có PK → tự tạo hidden clustered index
+    - Secondary indexes chứa primary key value (không phải pointer)
+
+    **SQL Server:**
+    - Có thể chọn clustered index (không nhất thiết là PK)
+    - Nếu không có clustered index → table = heap (không sort)
+    - Non-clustered indexes chứa row identifier (RID hoặc clustered key)
+
+    **PostgreSQL:**
+    - Không có clustered index theo nghĩa SQL Server
+    - Primary key = unique index (không phải clustered)
+    - Có thể dùng `CLUSTER` command để sort table theo index (one-time)
 - [x] Đọc về "full-text index" - when to use
     - Dùng cho **search text** (title/content), support tokenization, ranking; không thay thế được search engine chuyên
       dụng nhưng tốt cho full-text search đơn giản trong DB.
+
+    ### 🎯 Full-Text Index là gì?
+
+    **Full-text index** là loại index đặc biệt được thiết kế để **tìm kiếm text** trong các columns dạng VARCHAR/TEXT, thay vì chỉ tìm exact match như B-tree index.
+
+    Khác với B-tree index (tìm exact value), full-text index:
+    - **Tokenize** text thành words/tokens
+    - Hỗ trợ **partial matching** (tìm "database" khi search "data")
+    - Hỗ trợ **ranking/relevance scoring**
+    - Hỗ trợ **boolean operators** (AND, OR, NOT)
+
+    ### 📊 So sánh với B-tree Index:
+
+    | Tiêu chí | B-tree Index | Full-Text Index |
+    |----------|--------------|-----------------|
+    **Use case** | Exact match, range queries | Text search, keyword search |
+    **Query** | `WHERE col = 'value'` | `WHERE MATCH(col) AGAINST('keyword')` |
+    **Matching** | Exact only | Partial, fuzzy, relevance |
+    **Performance** | Rất nhanh (O(log n)) | Nhanh nhưng chậm hơn B-tree |
+    **Storage** | Nhỏ (chỉ keys) | Lớn (inverted index) |
+    **Maintenance** | Đơn giản | Phức tạp hơn (tokenization) |
+
+    ### 💡 Ví dụ cụ thể:
+
+    **Bảng `articles`:**
+    ```sql
+    CREATE TABLE articles (
+        id BIGINT PRIMARY KEY,
+        title VARCHAR(255),
+        content TEXT,
+        created_at TIMESTAMP
+    );
+    ```
+
+    **❌ B-tree Index (không hiệu quả cho text search):**
+    ```sql
+    CREATE INDEX idx_articles_title ON articles(title);
+
+    -- Query: Tìm articles có chứa "database"
+    SELECT * FROM articles WHERE title LIKE '%database%';
+    ```
+    - **Vấn đề**: `LIKE '%database%'` → **full table scan** (không dùng index)
+    - Phải scan toàn bộ table → rất chậm với bảng lớn
+
+    **✅ Full-Text Index:**
+    ```sql
+    -- MySQL
+    CREATE FULLTEXT INDEX idx_articles_title_content 
+    ON articles(title, content);
+
+    -- PostgreSQL
+    CREATE INDEX idx_articles_title_content 
+    ON articles USING GIN (to_tsvector('english', title || ' ' || content));
+    ```
+
+    **Query với Full-Text Index:**
+    ```sql
+    -- MySQL
+    SELECT *, MATCH(title, content) AGAINST('database performance' IN NATURAL LANGUAGE MODE) AS relevance
+    FROM articles
+    WHERE MATCH(title, content) AGAINST('database performance' IN NATURAL LANGUAGE MODE)
+    ORDER BY relevance DESC;
+
+    -- PostgreSQL
+    SELECT *, ts_rank(to_tsvector('english', title || ' ' || content), 
+                      plainto_tsquery('english', 'database performance')) AS relevance
+    FROM articles
+    WHERE to_tsvector('english', title || ' ' || content) 
+          @@ plainto_tsquery('english', 'database performance')
+    ORDER BY relevance DESC;
+    ```
+
+    ### 🔍 Các tính năng của Full-Text Index:
+
+    **1. Natural Language Search:**
+    ```sql
+    -- Tìm articles về "database" hoặc "performance"
+    SELECT * FROM articles
+    WHERE MATCH(title, content) AGAINST('database performance' IN NATURAL LANGUAGE MODE);
+    ```
+    - Tự động tìm cả "database" và "performance"
+    - Rank kết quả theo relevance
+
+    **2. Boolean Search:**
+    ```sql
+    -- MySQL
+    SELECT * FROM articles
+    WHERE MATCH(title, content) AGAINST('+database -MySQL' IN BOOLEAN MODE);
+    -- Tìm "database" nhưng KHÔNG có "MySQL"
+
+    -- PostgreSQL
+    SELECT * FROM articles
+    WHERE to_tsvector('english', title || ' ' || content) 
+          @@ to_tsquery('english', 'database & !MySQL');
+    ```
+
+    **3. Phrase Search:**
+    ```sql
+    -- MySQL
+    SELECT * FROM articles
+    WHERE MATCH(title, content) AGAINST('"database design"' IN BOOLEAN MODE);
+    -- Tìm exact phrase "database design"
+
+    -- PostgreSQL
+    SELECT * FROM articles
+    WHERE to_tsvector('english', title || ' ' || content) 
+          @@ phraseto_tsquery('english', 'database design');
+    ```
+
+    **4. Relevance Ranking:**
+    ```sql
+    -- MySQL
+    SELECT *, 
+           MATCH(title, content) AGAINST('database' IN NATURAL LANGUAGE MODE) AS score
+    FROM articles
+    WHERE MATCH(title, content) AGAINST('database' IN NATURAL LANGUAGE MODE)
+    ORDER BY score DESC;
+    ```
+
+    ### ⚠️ Limitations:
+
+    **1. Stop words:**
+    - Một số từ phổ biến (the, a, an, is, ...) bị bỏ qua
+    - Có thể config nhưng cần cẩn thận
+
+    **2. Minimum word length:**
+    - MySQL: Mặc định 4 characters (vd: "the" bị bỏ qua)
+    - Có thể config `ft_min_word_len`
+
+    **3. Language-specific:**
+    - Tokenization phụ thuộc ngôn ngữ
+    - Cần config đúng language cho kết quả tốt
+
+    **4. Storage overhead:**
+    - Full-text index lớn hơn B-tree index nhiều
+    - Cần nhiều disk/RAM
+
+    **5. Maintenance cost:**
+    - Update text → phải re-tokenize
+    - Chậm hơn B-tree index update
+
+    ### 🎯 Khi nào nên dùng Full-Text Index?
+
+    ✅ **Nên dùng khi:**
+    - Cần search text trong VARCHAR/TEXT columns
+    - Cần tìm keyword, không phải exact match
+    - Cần relevance ranking
+    - Search là feature chính của ứng dụng
+    - Data size vừa phải (< 10M rows)
+
+    ❌ **Không nên dùng khi:**
+    - Chỉ cần exact match → dùng B-tree index
+    - Text search phức tạp (fuzzy, synonyms, multi-language)
+    - Data rất lớn (> 100M rows) → cân nhắc search engine (Elasticsearch)
+    - Cần advanced features (faceting, aggregations, autocomplete)
+
+    ### 🔄 Alternative: Search Engine
+
+    **Khi nào cần search engine (Elasticsearch, Solr):**
+    - Data rất lớn (> 100M documents)
+    - Cần advanced features (faceting, aggregations, autocomplete)
+    - Cần real-time search với high throughput
+    - Cần search across multiple data sources
+    - Cần fuzzy matching, synonyms, multi-language
+
+    **Hybrid approach:**
+    - Database: Store data, exact queries
+    - Search engine: Index text, handle search queries
+    - Sync: Replicate text data từ DB → search engine
+
+    ### 📋 Best Practices:
+
+    **1. Chọn columns phù hợp:**
+    ```sql
+    -- ✅ Tốt: Title, description, content
+    CREATE FULLTEXT INDEX idx_products_search 
+    ON products(title, description);
+
+    -- ❌ Không tốt: ID, timestamps, numbers
+    CREATE FULLTEXT INDEX idx_products_bad 
+    ON products(id, created_at);  -- Vô nghĩa!
+    ```
+
+    **2. Combine với B-tree index:**
+    ```sql
+    -- B-tree cho exact match
+    CREATE INDEX idx_products_category ON products(category_id);
+    
+    -- Full-text cho text search
+    CREATE FULLTEXT INDEX idx_products_search ON products(title, description);
+    ```
+
+    **3. Monitor performance:**
+    - Full-text search có thể chậm với data lớn
+    - Cân nhắc pagination, limit results
+    - Cache popular searches
+
+    **4. Consider search engine khi:**
+    - Full-text search trở thành bottleneck
+    - Cần features nâng cao
+    - Scale lên hàng trăm triệu documents
 
 ### Query Optimization
 
