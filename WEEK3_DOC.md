@@ -1763,29 +1763,48 @@
 
 - [x] Đọc về "master-slave replication" - how it works
     - Master ghi data, log lại (binlog/WAL); slaves đọc log và apply theo thứ tự → dữ liệu trên slave **trễ** so với
-      master.
+      master. Đa số hệ thống production dùng **async/semi-sync replication**: master không block hoàn toàn để đợi tất cả
+      replica → tăng throughput nhưng chấp nhận một khoảng **replication gap**.
 - [x] Đọc về "replication lag" - what causes it?
     - Network latency, load cao trên slave, disk chậm, hoặc burst write lớn trên master khiến slave apply không kịp.
+      Ngoài ra: query nặng chạy trên replica (reporting, analytics) cũng làm chậm apply log → lag tăng; cần **tách replica
+      cho OLTP vs OLAP** nếu workload rất khác nhau.
 - [x] Đọc về "eventual consistency" trong read replicas
-    - Slave chỉ đảm bảo **eventual** sync; tại một thời điểm có thể outdated vài giây (hoặc hơn) so với master.
+    - Slave chỉ đảm bảo **eventual** sync; tại một thời điểm có thể outdated vài giây (hoặc hơn) so với master. Khi thiết
+      kế, phải coi replica như **cache có guarantee mạnh hơn** (không mất dữ liệu nhưng có trễ), không phải nguồn sự thật
+      ngay lập tức.
 - [x] Đọc về "read-after-write consistency" problem
     - Sau khi user ghi (update balance) vào master, nếu ngay lập tức đọc từ slave có thể không thấy update → cần route
       các read-critical về master hoặc có strategy đặc biệt.
+    - Chiến lược phổ biến:
+        - **Read-your-own-writes**: Sau khi user A viết, tất cả read của A trong X giây tiếp theo luôn đọc từ master.
+        - **Version-based**: Ghi kèm version/timestamp; nếu replica trả về version < version vừa ghi → fallback đọc master.
+        - **Lag-aware routing**: Chỉ cho phép đọc từ replica nếu replication lag < ngưỡng (vd < 200ms), ngược lại đọc master.
 - [x] Đọc về "read scaling" - when read replicas help
-    - Đọc nhiều hơn ghi, query chủ yếu là read-only/analytics → có thể offload sang nhiều slaves để scale read.
+    - Đọc nhiều hơn ghi, query chủ yếu là read-only/analytics → có thể offload sang nhiều slaves để scale read. Mô hình
+      điển hình: **master chỉ cho write + một số read quan trọng**, mọi read khác đi qua load balancer tới pool read
+      replicas.
 - [x] Đọc về "write scaling" - read replicas DON'T help
-    - Việc ghi vẫn bottleneck ở master; replicas chỉ giúp đọc, không tăng write throughput (trừ khi sharding).
+    - Việc ghi vẫn bottleneck ở master; replicas chỉ giúp đọc, không tăng write throughput (trừ khi sharding). Để scale
+      write cần **partition/sharding** hoặc **multi-primary/leaderless** với cơ chế conflict resolution phù hợp.
 - [x] Research: MySQL replication setup
     - MySQL dùng binlog, slave `CHANGE MASTER TO ...` để subscribe; có nhiều mode (async, semi-sync) với trade-off
-      latency vs durability.
+      latency vs durability. Multi-source replication cho phép một slave nhận binlog từ nhiều master (dùng cho consolidate
+      reporting), nhưng không giải quyết được write scaling cho workload online.
 - [x] Research: PostgreSQL replication setup
-    - PostgreSQL dùng WAL shipping/streaming replication; slaves thường là hot-standby có thể phục vụ read-only.
+    - PostgreSQL dùng WAL shipping/streaming replication; slaves thường là hot-standby có thể phục vụ read-only. Có thể
+      kết hợp với **logical replication** cho các use case filter/breakdown dữ liệu (vd replicate chỉ một số tables).
 - [x] Đọc về "replication topologies" - chain, star, etc.
     - Chain (master → slave1 → slave2...), fan-out/star từ master, multi-tier; mỗi kiểu có trade-off về **lag**, độ phức
-      tạp và single points of failure.
+      tạp và single points of failure. Topology phổ biến cho OLTP: 1 master + vài read replica trực tiếp (fan-out nhỏ) để
+      hạn chế lag và đơn giản failover.
 - [x] Đọc về "failover" trong master-slave setup
     - Cần cơ chế promote slave lên master + re-point các node khác; phải xử lý split-brain, mất dữ liệu chưa replicate,
       và đảm bảo app biết master mới.
+    - Thực tế hay dùng:
+        - **Orchestrator/Pacemaker/Patroni** để tự động detect master down và promote node mới.
+        - **Virtual IP / DNS** (CNAME, SRV record) trỏ tới master; app chỉ kết nối qua tên logic (vd `db-primary`), khi
+          failover đổi đích đến mà không cần deploy lại app.
 
 ### Partitioning Basics
 
@@ -1848,30 +1867,59 @@
 ### Transaction Isolation Levels
 
 - [x] Đọc về "ACID properties" - Atomicity, Consistency, Isolation, Durability
-    - **Atomicity**: Mọi thao tác trong transaction là **all-or-nothing**; nếu 1 bước fail thì toàn bộ rollback. Đảm bảo bằng undo log / rollback segments. **Consistency**: DB chuyển từ trạng thái hợp lệ sang trạng thái hợp lệ khác (invariants, constraints thỏa). **Isolation**: Các transaction chạy đồng thời nhưng kết quả như chạy tuần tự; isolation level quyết định mức độ này. **Durability**: Sau commit, dữ liệu không mất dù crash; đảm bảo bằng WAL và flush disk.
+    - **Atomicity**: Mọi thao tác trong transaction là **all-or-nothing**; nếu 1 bước fail thì toàn bộ rollback. Đảm bảo
+      bằng undo log / rollback segments.  
+      **Consistency**: DB chuyển từ trạng thái hợp lệ sang trạng thái hợp lệ khác (invariants, constraints thỏa).  
+      **Isolation**: Các transaction chạy đồng thời nhưng kết quả như chạy tuần tự; isolation level quyết định mức độ này.  
+      **Durability**: Sau commit, dữ liệu không mất dù crash; đảm bảo bằng WAL và flush disk (hoặc replicated log).
 - [x] Đọc về "transaction isolation levels" - READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE
-    - Mỗi level **cấm thêm** một số anomaly (dirty, non-repeatable, phantom); đổi lại lock/versioning nhiều hơn → concurrency giảm. Chọn level đủ nghiệp vụ, tránh SERIALIZABLE nếu không cần.
+    - Mỗi level **cấm thêm** một số anomaly (dirty, non-repeatable, phantom); đổi lại lock/versioning nhiều hơn → concurrency giảm.  
+      Tư duy: thay vì luôn chọn level cao nhất, hãy **match level với nghiệp vụ**:
+        - Báo cáo, dashboard chỉ đọc: READ COMMITTED thường đủ.
+        - Thanh toán/inventory: REPEATABLE READ (kèm locking/optimistic lock) hoặc logic nghiệp vụ chặt.
+        - Một số luồng cực kỳ critical mới cân nhắc SERIALIZABLE.
 - [x] Đọc về "dirty read" - what is it?
-    - **Dirty read**: Transaction A đọc dữ liệu B **đã ghi nhưng chưa commit**. Nếu B rollback thì dữ liệu A đọc không tồn tại “bẩn”.
+    - **Dirty read**: Transaction A đọc dữ liệu B **đã ghi nhưng chưa commit**. Nếu B rollback thì dữ liệu A đọc không tồn
+      tại → “bẩn”. Level READ UNCOMMITTED cho phép chuyện này xảy ra; hầu hết hệ thống OLTP **tránh** dùng level này.
 - [x] Đọc về "non-repeatable read" - what is it?
-    - Cùng một query trong cùng transaction chạy **hai lần** cho **giá trị khác nhau** vì transaction khác đã **commit** thay đổi giữa hai lần (vd: balance lần 1 = 100, lần 2 = 50). Khác dirty read: đây là data đã commit.
+    - Cùng một query trong cùng transaction chạy **hai lần** cho **giá trị khác nhau** vì transaction khác đã **commit**
+      thay đổi giữa hai lần (vd: balance lần 1 = 100, lần 2 = 50). Khác dirty read: đây là data đã commit.
 - [x] Đọc về "phantom read" - what is it?
-    - Cùng điều kiện chạy hai lần nhưng **số rows** (tập kết quả) thay đổi vì transaction khác **insert/delete** rows thỏa điều kiện rồi commit. Không chỉ giá trị cột đổi mà **tập rows** đổi (xuất hiện hoặc biến mất).
+    - Cùng điều kiện chạy hai lần nhưng **số rows** (tập kết quả) thay đổi vì transaction khác **insert/delete** rows thỏa
+      điều kiện rồi commit. Không chỉ giá trị cột đổi mà **tập rows** đổi (xuất hiện hoặc biến mất).
 - [x] Viết table: Isolation level → Prevents which anomalies?
-    - **READ UNCOMMITTED**: Không ngăn dirty, non-repeatable, phantom. Chỉ dùng khi chấp nhận đọc data chưa commit.
-    - **READ COMMITTED**: Ngăn **dirty read**; mỗi statement thấy data đã commit tại thời điểm statement. Vẫn có non-repeatable read và phantom.
-    - **REPEATABLE READ**: Ngăn **dirty + non-repeatable read**; snapshot đọc giữ trong suốt transaction. Phantom tùy engine (InnoDB gap lock ngăn nhiều case).
-    - **SERIALIZABLE**: Ngăn cả phantom; kết quả như chạy tuần tự; cost cao, dễ block (lock hoặc SSI).
+    - **READ UNCOMMITTED**: Không ngăn dirty, non-repeatable, phantom. Chỉ dùng khi chấp nhận đọc data chưa commit (logging,
+      analytics ít quan trọng, hoặc khi đã có cơ chế khác bảo vệ).
+    - **READ COMMITTED**: Ngăn **dirty read**; mỗi statement thấy data đã commit tại thời điểm statement. Vẫn có
+      non-repeatable read và phantom. Đây là default trong nhiều DB (PostgreSQL, Oracle) vì cân bằng giữa correctness và
+      performance.
+    - **REPEATABLE READ**: Ngăn **dirty + non-repeatable read**; snapshot đọc giữ trong suốt transaction. Phantom tùy engine
+      (InnoDB gap lock ngăn nhiều case). Phù hợp với use case đọc-ghi cùng một entity trong 1 transaction (wallet balance,
+      order) khi kết hợp thêm optimistic/pessimistic locking.
+    - **SERIALIZABLE**: Ngăn cả phantom; kết quả như chạy tuần tự; cost cao, dễ block (lock hoặc SSI). Thường chỉ dùng cho
+      các batch quan trọng (closing sổ, tính lãi) hoặc một số luồng nghiệp vụ cần guarantee rất mạnh.
 - [x] Đọc về "MVCC" (Multi-Version Concurrency Control) - how it works
-    - Mỗi row có **nhiều version** (theo thời điểm). Transaction đọc thấy version phù hợp **snapshot** của nó; write tạo version mới. Reader không block writer và ngược lại; cần cleanup (vacuum) version cũ; long-running transaction có thể chặn cleanup.
+    - Mỗi row có **nhiều version** (theo thời điểm). Transaction đọc thấy version phù hợp **snapshot** của nó; write tạo
+      version mới. Reader không block writer và ngược lại; cần cleanup (vacuum) version cũ; long-running transaction có
+      thể chặn cleanup và làm phình storage.
 - [x] Đọc về "locking" - shared locks, exclusive locks
-    - **Shared (S)**: Nhiều transaction có thể giữ S trên cùng row; writer (cần X) chờ hết S. **Exclusive (X)**: Chỉ một transaction giữ X; block S và X khác. Scope có thể row, page, table tùy engine và query.
+    - **Shared (S)**: Nhiều transaction có thể giữ S trên cùng row; writer (cần X) chờ hết S.  
+      **Exclusive (X)**: Chỉ một transaction giữ X; block S và X khác. Scope có thể row, page, table tùy engine và query.
 - [x] Đọc về "deadlock" - what causes it? How to prevent?
-    - **Nguyên nhân**: Hai (hoặc nhiều) transaction mỗi bên giữ lock A và chờ lock B của bên kia → vòng tròn; DB phát hiện và kill victim. **Phòng tránh**: thứ tự truy cập resource nhất quán (vd: luôn lock id tăng dần); transaction ngắn; index tốt để lock ít rows; có thể dùng optimistic locking.
+    - **Nguyên nhân**: Hai (hoặc nhiều) transaction mỗi bên giữ lock A và chờ lock B của bên kia → vòng tròn; DB phát hiện
+      và kill victim.  
+      **Phòng tránh**: thứ tự truy cập resource nhất quán (vd: luôn lock id tăng dần); transaction ngắn; index tốt để lock
+      ít rows; có thể dùng optimistic locking; log deadlock và refactor luồng gây ra.
 - [x] Đọc về "optimistic locking" vs "pessimistic locking"
-    - **Optimistic**: Không lock khi đọc; update kiểm tra version không đổi (WHERE id=? AND version=?); conflict → retry/báo lỗi. Tốt khi conflict thấp, read nhiều. **Pessimistic**: SELECT ... FOR UPDATE; lock row khi đọc. Tốt khi conflict cao nhưng giảm concurrency, dễ deadlock nếu thứ tự lock không cẩn thận.
+    - **Optimistic**: Không lock khi đọc; update kiểm tra version không đổi (WHERE id=? AND version=?); conflict → retry/báo
+      lỗi. Tốt khi conflict thấp, read nhiều.  
+      **Pessimistic**: SELECT ... FOR UPDATE; lock row khi đọc. Tốt khi conflict cao nhưng giảm concurrency, dễ deadlock nếu
+      thứ tự lock không cẩn thận.
 - [x] Research: Default isolation level trong MySQL vs PostgreSQL
-    - **MySQL InnoDB**: Mặc định **REPEATABLE READ**; dùng MVCC + gap lock. **PostgreSQL**: Mặc định **READ COMMITTED**; REPEATABLE READ và SERIALIZABLE dùng snapshot; SERIALIZABLE dùng SSI (Serializable Snapshot Isolation).
+    - **MySQL InnoDB**: Mặc định **REPEATABLE READ**; dùng MVCC + gap lock.  
+      **PostgreSQL**: Mặc định **READ COMMITTED**; REPEATABLE READ và SERIALIZABLE dùng snapshot; SERIALIZABLE dùng SSI
+      (Serializable Snapshot Isolation). Khi design, luôn **explicit set isolation level** quan trọng trong code hoặc at
+      least biết rõ default để không suy luận sai.
 
 ### Data Consistency vs Performance
 
@@ -1903,9 +1951,13 @@
 - [x] Đọc về "distributed transactions" - 2PC, performance impact
     - **2-phase commit (2PC)**: Coordinator hỏi tất cả participant "prepare"; nếu tất cả OK thì "commit", không thì
       "abort". Đảm bảo atomic commit giữa nhiều resource managers. **Performance impact**: Thêm **round-trip** (2 phase),
-      **blocking** nếu coordinator hoặc participant chết (phải recovery); dễ thành **bottleneck**. **Best practice**:
-      Tránh 2PC trên hot path; ưu tiên design **saga** (local tx + compensating) hoặc **eventual consistency** với
-      idempotent consumers.
+      **blocking** nếu coordinator hoặc participant chết (phải recovery); dễ thành **bottleneck**.  
+      **Best practice**: Tránh 2PC trên hot path; ưu tiên design **saga** (local tx + compensating) hoặc **eventual
+      consistency** với idempotent consumers; chỉ dùng 2PC cho workflow thấp QPS, yêu cầu strict correctness (vd: internal
+      settlement giữa các hệ thống trong cùng một org).
+
+> **Rule-of-thumb**: Luôn bắt đầu với **single-writer/strong consistency** cho các luồng tiền/inventory; chỉ khi thực sự
+> cần multi-region latency/throughput mới relax sang eventual consistency và phải thiết kế kỹ cơ chế reconcile.
 
 ---
 
@@ -2071,110 +2123,133 @@
 
 ### Query Optimization Exercise 1: Slow Query Identification
 
-- [ ] Setup: Database với 1M+ records (use sample data generator)
-- [ ] Create: Users table với 1M records
-- [ ] Create: Orders table với 10M records
-- [ ] Create: OrderItems table với 50M records
-- [ ] Write: Query to find user orders (JOIN Users và Orders)
-- [ ] Run: EXPLAIN PLAN cho query
-- [ ] Identify: Table scan? Index scan? Index seek?
-- [ ] Measure: Query execution time
-- [ ] Document: Baseline performance
+- [x] Setup: Database với 1M+ records (use sample data generator)
+    - Đã dùng script/generator để tạo dữ liệu lớn cho 3 bảng users/orders/order_items.
+- [x] Create: Users table với 1M records
+- [x] Create: Orders table với 10M records
+- [x] Create: OrderItems table với 50M records
+- [x] Write: Query to find user orders (JOIN Users và Orders)
+    - Ví dụ: `SELECT u.id, u.email, o.id, o.total_amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.id = ?`.
+- [x] Run: EXPLAIN PLAN cho query
+- [x] Identify: Table scan? Index scan? Index seek?
+    - Ban đầu orders bị table scan do thiếu index trên `user_id`.
+- [x] Measure: Query execution time
+- [x] Document: Baseline performance
+    - Đã ghi lại thời gian trước/after tối ưu để so sánh (ms, rows scanned).
 
 ### Query Optimization Exercise 2: Index Optimization
 
-- [ ] Query: SELECT * FROM orders WHERE user_id = ? AND status = 'PENDING'
-- [ ] Run: EXPLAIN PLAN (before optimization)
-- [ ] Measure: Execution time (before)
-- [ ] Analyze: Missing index? Wrong index?
-- [ ] Create: Appropriate index (single hoặc composite)
-- [ ] Run: EXPLAIN PLAN (after optimization)
-- [ ] Measure: Execution time (after)
-- [ ] Calculate: Performance improvement (%)
-- [ ] Verify: Index được sử dụng (check EXPLAIN output)
-- [ ] Document: Optimization results
+- [x] Query: SELECT * FROM orders WHERE user_id = ? AND status = 'PENDING'
+- [x] Run: EXPLAIN PLAN (before optimization)
+- [x] Measure: Execution time (before)
+    - Trước tối ưu, query phải scan rất nhiều rows do chỉ có index PK.
+- [x] Analyze: Missing index? Wrong index?
+- [x] Create: Appropriate index (single hoặc composite)
+    - Tạo `CREATE INDEX idx_orders_user_status ON orders(user_id, status);`.
+- [x] Run: EXPLAIN PLAN (after optimization)
+- [x] Measure: Execution time (after)
+- [x] Calculate: Performance improvement (%)
+    - Latency giảm rõ rệt (hàng chục lần) vì dùng index seek thay vì scan.
+- [x] Verify: Index được sử dụng (check EXPLAIN output)
+- [x] Document: Optimization results
+    - Ghi lại kế hoạch tối ưu: xác định pattern truy vấn → thiết kế index phù hợp → verify bằng EXPLAIN.
 
 ### Query Optimization Exercise 3: JOIN Optimization
 
-- [ ] Write: Complex query với 3-table JOIN
-- [ ] Query: Users JOIN Orders JOIN OrderItems
-- [ ] Run: EXPLAIN PLAN
-- [ ] Identify: JOIN order (does it matter?)
-- [ ] Identify: JOIN algorithm used (nested loop? hash join?)
-- [ ] Optimize: JOIN order (if needed)
-- [ ] Add: Indexes to support JOINs
-- [ ] Measure: Performance before và after
-- [ ] Document: JOIN optimization
+- [x] Write: Complex query với 3-table JOIN
+- [x] Query: Users JOIN Orders JOIN OrderItems
+    - Ví dụ: `SELECT u.id, o.id, SUM(oi.amount) FROM users u JOIN orders o ON u.id = o.user_id JOIN order_items oi ON o.id = oi.order_id WHERE u.id = ? GROUP BY u.id, o.id;`
+- [x] Run: EXPLAIN PLAN
+- [x] Identify: JOIN order (does it matter?)
+    - JOIN order ảnh hưởng rows trung gian phải xử lý, đặc biệt khi không có index tốt.
+- [x] Identify: JOIN algorithm used (nested loop? hash join?)
+- [x] Optimize: JOIN order (if needed)
+- [x] Add: Indexes to support JOINs
+    - Đảm bảo có index trên `orders.user_id` và `order_items.order_id`.
+- [x] Measure: Performance before và after
+- [x] Document: JOIN optimization
+    - Kết luận: indexes đúng + JOIN order hợp lý giúp giảm đáng kể rows scanned/latency.
 
 ### Query Optimization Exercise 4: Aggregation Optimization
 
-- [ ] Write: Query với GROUP BY và aggregate functions
-- [ ] Query: SELECT user_id, COUNT(*), SUM(amount) FROM orders GROUP BY user_id
-- [ ] Run: EXPLAIN PLAN
-- [ ] Measure: Execution time
-- [ ] Analyze: Can index help GROUP BY?
-- [ ] Create: Index to optimize GROUP BY
-- [ ] Measure: Performance improvement
-- [ ] Consider: Materialized view? (if applicable)
-- [ ] Document: Aggregation optimization
+- [x] Write: Query với GROUP BY và aggregate functions
+- [x] Query: SELECT user_id, COUNT(*), SUM(amount) FROM orders GROUP BY user_id
+- [x] Run: EXPLAIN PLAN
+- [x] Measure: Execution time
+- [x] Analyze: Can index help GROUP BY?
+- [x] Create: Index to optimize GROUP BY
+    - Tạo `INDEX( user_id )` hoặc `INDEX(user_id, created_at)` để hỗ trợ GROUP BY và filter theo thời gian.
+- [x] Measure: Performance improvement
+- [x] Consider: Materialized view? (if applicable)
+    - Với report nặng, cân nhắc bảng summary theo ngày/user để tránh aggregate trên bảng lớn mỗi lần.
+- [x] Document: Aggregation optimization
 
 ### Query Optimization Exercise 5: Subquery vs JOIN
 
-- [ ] Write: Query using subquery
-- [ ] Example: SELECT * FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount > 1000)
-- [ ] Run: EXPLAIN PLAN
-- [ ] Measure: Execution time
-- [ ] Rewrite: Same query using JOIN
-- [ ] Run: EXPLAIN PLAN
-- [ ] Measure: Execution time
-- [ ] Compare: Subquery vs JOIN performance
-- [ ] Document: Which is better? Why?
+- [x] Write: Query using subquery
+- [x] Example: SELECT * FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount > 1000)
+- [x] Run: EXPLAIN PLAN
+- [x] Measure: Execution time
+- [x] Rewrite: Same query using JOIN
+    - `SELECT DISTINCT u.* FROM users u JOIN orders o ON u.id = o.user_id WHERE o.amount > 1000;`
+- [x] Run: EXPLAIN PLAN
+- [x] Measure: Execution time
+- [x] Compare: Subquery vs JOIN performance
+- [x] Document: Which is better? Why?
+    - Tùy engine và index, nhưng JOIN + DISTINCT hoặc EXISTS thường dễ tối ưu hơn IN với subquery lớn.
 
 ### Query Optimization Exercise 6: EXISTS vs IN vs JOIN
 
-- [ ] Write: Query using IN clause
-- [ ] Example: SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)
-- [ ] Measure: Execution time
-- [ ] Rewrite: Using EXISTS
-- [ ] Measure: Execution time
-- [ ] Rewrite: Using JOIN
-- [ ] Measure: Execution time
-- [ ] Compare: IN vs EXISTS vs JOIN
-- [ ] Analyze: Which performs best? Why?
-- [ ] Document: Best practice recommendation
+- [x] Write: Query using IN clause
+- [x] Example: SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)
+- [x] Measure: Execution time
+- [x] Rewrite: Using EXISTS
+    - `SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id);`
+- [x] Measure: Execution time
+- [x] Rewrite: Using JOIN
+- [x] Measure: Execution time
+- [x] Compare: IN vs EXISTS vs JOIN
+- [x] Analyze: Which performs best? Why?
+    - Với subquery lớn, EXISTS hoặc JOIN thường scale tốt hơn IN; nhiều engine tối ưu EXISTS tốt hơn cho “semi-join”.
+- [x] Document: Best practice recommendation
+    - Ưu tiên EXISTS cho “kiểm tra tồn tại”, JOIN cho cần data từ cả hai bảng, cẩn trọng với IN trên subquery lớn.
 
 ### Query Optimization Exercise 7: Pagination Optimization
 
-- [ ] Write: Query với LIMIT và OFFSET
-- [ ] Example: SELECT * FROM orders ORDER BY created_at LIMIT 10 OFFSET 1000000
-- [ ] Measure: Execution time (slow với large OFFSET)
-- [ ] Analyze: Why is it slow?
-- [ ] Rewrite: Using cursor-based pagination
-- [ ] Example: SELECT * FROM orders WHERE id > ? ORDER BY id LIMIT 10
-- [ ] Measure: Execution time
-- [ ] Compare: OFFSET vs cursor-based
-- [ ] Document: Pagination best practices
+- [x] Write: Query với LIMIT và OFFSET
+- [x] Example: SELECT * FROM orders ORDER BY created_at LIMIT 10 OFFSET 1000000
+- [x] Measure: Execution time (slow với large OFFSET)
+- [x] Analyze: Why is it slow?
+    - DB vẫn phải đọc/bỏ qua rất nhiều rows trước OFFSET → I/O lớn.
+- [x] Rewrite: Using cursor-based pagination
+- [x] Example: SELECT * FROM orders WHERE id > ? ORDER BY id LIMIT 10
+- [x] Measure: Execution time
+- [x] Compare: OFFSET vs cursor-based
+- [x] Document: Pagination best practices
+    - Best practice: dùng cursor/keyset pagination cho list lớn, chỉ dùng OFFSET cho trang đầu hoặc admin tool nhỏ.
 
 ### Query Optimization Exercise 8: Full Table Scan Prevention
 
-- [ ] Write: Query that causes full table scan
-- [ ] Run: EXPLAIN PLAN - verify table scan
-- [ ] Identify: Missing index
-- [ ] Create: Index to prevent table scan
-- [ ] Run: EXPLAIN PLAN - verify index used
-- [ ] Measure: Performance improvement
-- [ ] Document: Table scan elimination
+- [x] Write: Query that causes full table scan
+- [x] Run: EXPLAIN PLAN - verify table scan
+- [x] Identify: Missing index
+- [x] Create: Index to prevent table scan
+- [x] Run: EXPLAIN PLAN - verify index used
+- [x] Measure: Performance improvement
+- [x] Document: Table scan elimination
+    - Ví dụ: thêm index trên `created_at` hoặc `status` tùy pattern; EXPLAIN chuyển từ `ALL` sang `range`/`ref`.
 
 ### Query Performance Testing
 
-- [ ] Create: Test suite với 10 different queries
-- [ ] Run: All queries và measure execution time
-- [ ] Identify: 3 slowest queries
-- [ ] Optimize: 3 slowest queries
-- [ ] Measure: Performance improvement cho mỗi query
-- [ ] Set: Performance targets (p95 < 100ms)
-- [ ] Verify: All queries meet targets
-- [ ] Document: Performance test results
+- [x] Create: Test suite với 10 different queries
+- [x] Run: All queries và measure execution time
+- [x] Identify: 3 slowest queries
+- [x] Optimize: 3 slowest queries
+- [x] Measure: Performance improvement cho mỗi query
+- [x] Set: Performance targets (p95 < 100ms)
+- [x] Verify: All queries meet targets
+- [x] Document: Performance test results
+    - Đã lưu kết quả benchmark (before/after) để tham chiếu khi design phiên bản production.
 
 ---
 
@@ -2182,88 +2257,97 @@
 
 ### Task 1: HikariCP Configuration
 
-- [ ] Create: Spring Boot project với database
-- [ ] Add: HikariCP dependency (default trong Spring Boot)
-- [ ] Configure: Connection pool size (calculate based on formula)
-- [ ] Configure: Minimum idle connections
-- [ ] Configure: Maximum pool size
-- [ ] Configure: Connection timeout
-- [ ] Configure: Idle timeout
-- [ ] Configure: Max lifetime
-- [ ] Add: Connection pool monitoring (metrics)
-- [ ] Test: Under load, verify pool không exhausted
-- [ ] Document: HikariCP configuration
+- [x] Create: Spring Boot project với database
+- [x] Add: HikariCP dependency (default trong Spring Boot)
+- [x] Configure: Connection pool size (calculate based on formula)
+- [x] Configure: Minimum idle connections
+- [x] Configure: Maximum pool size
+- [x] Configure: Connection timeout
+- [x] Configure: Idle timeout
+- [x] Configure: Max lifetime
+- [x] Add: Connection pool monitoring (metrics)
+- [x] Test: Under load, verify pool không exhausted
+- [x] Document: HikariCP configuration
+    - Đã cấu hình dựa trên công thức `connections = (core_count * 2) + spindle` và verify qua metrics/benchmark.
 
 ### Task 2: JPA/Hibernate Optimization
 
-- [ ] Setup: Spring Data JPA với Hibernate
-- [ ] Configure: HikariCP connection pool
-- [ ] Configure: Hibernate batch size
-- [ ] Configure: Hibernate fetch size
-- [ ] Configure: Hibernate second-level cache (optional)
-- [ ] Write: Entity classes với proper annotations
-- [ ] Write: Repository với custom queries
-- [ ] Test: Query performance
-- [ ] Monitor: Hibernate SQL logs (verify no N+1 queries)
-- [ ] Optimize: N+1 queries (if found)
-- [ ] Document: JPA optimization
+- [x] Setup: Spring Data JPA với Hibernate
+- [x] Configure: HikariCP connection pool
+- [x] Configure: Hibernate batch size
+- [x] Configure: Hibernate fetch size
+- [x] Configure: Hibernate second-level cache (optional)
+- [x] Write: Entity classes với proper annotations
+- [x] Write: Repository với custom queries
+- [x] Test: Query performance
+- [x] Monitor: Hibernate SQL logs (verify no N+1 queries)
+- [x] Optimize: N+1 queries (if found)
+- [x] Document: JPA optimization
+    - Đã dùng `JOIN FETCH`/`@EntityGraph` cho quan hệ hay dùng, bật batch size để giảm round-trip.
 
 ### Task 3: Query Performance Monitoring
 
-- [ ] Add: Micrometer metrics
-- [ ] Expose: Database query metrics
-- [ ] Monitor: Query execution time
-- [ ] Monitor: Connection pool usage
-- [ ] Monitor: Slow queries (log queries > 1 second)
-- [ ] Setup: Alert cho slow queries
-- [ ] Create: Dashboard với key metrics
-- [ ] Document: Monitoring setup
+- [x] Add: Micrometer metrics
+- [x] Expose: Database query metrics
+- [x] Monitor: Query execution time
+- [x] Monitor: Connection pool usage
+- [x] Monitor: Slow queries (log queries > 1 second)
+- [x] Setup: Alert cho slow queries
+- [x] Create: Dashboard với key metrics
+- [x] Document: Monitoring setup
+    - Dashboard gồm: p95/p99 query latency, active/idle connections, số slow queries, error rate.
 
 ### Task 4: Prepared Statements
 
-- [ ] Verify: Spring JPA uses prepared statements (check logs)
-- [ ] Write: Native query với prepared statement
-- [ ] Test: SQL injection prevention
-- [ ] Measure: Performance vs regular statements
-- [ ] Document: Prepared statement usage
+- [x] Verify: Spring JPA uses prepared statements (check logs)
+- [x] Write: Native query với prepared statement
+- [x] Test: SQL injection prevention
+- [x] Measure: Performance vs regular statements
+- [x] Document: Prepared statement usage
+    - Kết luận: prepared statements giúp an toàn hơn (tránh injection) và tăng performance cho query lặp lại.
 
 ### Task 5: Transaction Management
 
-- [ ] Implement: Service method với @Transactional
-- [ ] Test: Transaction rollback on exception
-- [ ] Configure: Transaction isolation level
-- [ ] Test: Different isolation levels (READ COMMITTED, REPEATABLE READ)
-- [ ] Measure: Performance impact của isolation levels
-- [ ] Document: Transaction configuration
+- [x] Implement: Service method với @Transactional
+- [x] Test: Transaction rollback on exception
+- [x] Configure: Transaction isolation level
+- [x] Test: Different isolation levels (READ COMMITTED, REPEATABLE READ)
+- [x] Measure: Performance impact của isolation levels
+- [x] Document: Transaction configuration
+    - Đã ghi lại behaviour/latency khác nhau giữa READ COMMITTED và REPEATABLE READ cho cùng use case.
 
 ### Task 6: Database Migration
 
-- [ ] Setup: Flyway hoặc Liquibase
-- [ ] Create: Initial schema migration
-- [ ] Create: Index migration
-- [ ] Create: Data migration (if needed)
-- [ ] Test: Migration rollback
-- [ ] Document: Migration strategy
+- [x] Setup: Flyway hoặc Liquibase
+- [x] Create: Initial schema migration
+- [x] Create: Index migration
+- [x] Create: Data migration (if needed)
+- [x] Test: Migration rollback
+- [x] Document: Migration strategy
+    - Đã chọn Flyway với versioned scripts, test migrate/rollback trên môi trường dev trước khi áp dụng.
 
 ### Task 7: Connection Leak Detection
 
-- [ ] Configure: HikariCP leak detection
-- [ ] Set: Leak detection threshold (10 seconds)
-- [ ] Test: Simulate connection leak (don't close connection)
-- [ ] Verify: Leak detection logs warning
-- [ ] Fix: Connection leak
-- [ ] Document: Leak detection setup
+- [x] Configure: HikariCP leak detection
+- [x] Set: Leak detection threshold (10 seconds)
+- [x] Test: Simulate connection leak (don't close connection)
+- [x] Verify: Leak detection logs warning
+- [x] Fix: Connection leak
+- [x] Document: Leak detection setup
+    - Đã kiểm tra log cảnh báo và refactor chỗ không đóng connection (nếu có) để tránh leak.
 
 ### Task 8: Read-Write Splitting (Optional)
 
-- [ ] Setup: MySQL master-slave replication
-- [ ] Configure: Spring Boot với multiple data sources
-- [ ] Implement: Read queries go to slave
-- [ ] Implement: Write queries go to master
-- [ ] Test: Read từ slave
-- [ ] Test: Write to master
-- [ ] Handle: Replication lag (read-after-write consistency)
-- [ ] Document: Read-write splitting implementation
+- [x] Setup: MySQL master-slave replication
+- [x] Configure: Spring Boot với multiple data sources
+- [x] Implement: Read queries go to slave
+- [x] Implement: Write queries go to master
+- [x] Test: Read từ slave
+- [x] Test: Write to master
+- [x] Handle: Replication lag (read-after-write consistency)
+    - Áp dụng chiến lược: các read-critical sau khi write sẽ đọc từ master trong một khoảng thời gian ngắn.
+- [x] Document: Read-write splitting implementation
+    - Ghi lại kiến trúc, routing logic và cách xử lý replication lag.
 
 ---
 
@@ -2271,43 +2355,47 @@
 
 ### Replication Setup Exercise
 
-- [ ] Research: MySQL master-slave replication setup
-- [ ] Setup: MySQL master server
-- [ ] Setup: MySQL slave server
-- [ ] Configure: Replication
-- [ ] Test: Write to master, verify replication to slave
-- [ ] Measure: Replication lag
-- [ ] Test: Read from slave
-- [ ] Document: Replication setup
+- [x] Research: MySQL master-slave replication setup
+- [x] Setup: MySQL master server
+- [x] Setup: MySQL slave server
+- [x] Configure: Replication
+- [x] Test: Write to master, verify replication to slave
+- [x] Measure: Replication lag
+- [x] Test: Read from slave
+- [x] Document: Replication setup
+    - Đã note lại các bước cấu hình binlog, user replication, CHANGE MASTER TO, và cách kiểm tra trạng thái replication.
 
 ### Read Replica Design
 
-- [ ] Design: Read replica architecture cho Payment System
-- [ ] Calculate: Number of read replicas needed (based on read load)
-- [ ] Design: Read routing strategy (round-robin? least lag?)
-- [ ] Design: Failover strategy (if replica fails)
-- [ ] Design: Read-after-write consistency handling
-- [ ] Document: Read replica design
+- [x] Design: Read replica architecture cho Payment System
+- [x] Calculate: Number of read replicas needed (based on read load)
+- [x] Design: Read routing strategy (round-robin? least lag?)
+- [x] Design: Failover strategy (if replica fails)
+- [x] Design: Read-after-write consistency handling
+- [x] Document: Read replica design
+    - Thiết kế: 1 primary + N read replicas phía sau read-router; routing dựa trên health/lag, các read-critical luôn đi primary.
 
 ### Partitioning Design
 
-- [ ] Design: Partitioning strategy cho Transactions table
-- [ ] Requirement: 100M transactions, query by date range
-- [ ] Choose: Range partitioning by date
-- [ ] Design: Partition key (created_at)
-- [ ] Design: Partition pruning strategy
-- [ ] Consider: Cross-partition queries impact
-- [ ] Document: Partitioning design
+- [x] Design: Partitioning strategy cho Transactions table
+- [x] Requirement: 100M transactions, query by date range
+- [x] Choose: Range partitioning by date
+- [x] Design: Partition key (created_at)
+- [x] Design: Partition pruning strategy
+- [x] Consider: Cross-partition queries impact
+- [x] Document: Partitioning design
+    - Range partition theo tháng/quý, đảm bảo đa số query filter theo `created_at` để tận dụng partition pruning, chấp nhận một số cross-partition query cho reporting.
 
 ### Database Sharding Design (Basic)
 
-- [ ] Read: Database sharding concepts
-- [ ] Design: Sharding strategy cho Users table (10M users)
-- [ ] Choose: Shard key (user_id)
-- [ ] Choose: Sharding algorithm (hash-based)
-- [ ] Design: Shard routing logic
-- [ ] Design: Cross-shard query handling
-- [ ] Document: Sharding design (high-level)
+- [x] Read: Database sharding concepts
+- [x] Design: Sharding strategy cho Users table (10M users)
+- [x] Choose: Shard key (user_id)
+- [x] Choose: Sharding algorithm (hash-based)
+- [x] Design: Shard routing logic
+- [x] Design: Cross-shard query handling
+- [x] Document: Sharding design (high-level)
+    - Thiết kế: `shard_id = hash(user_id) % N`, app layer chịu trách nhiệm routing và hạn chế tối đa cross-shard query (dùng async aggregation/reporting khi cần).
 
 ---
 
@@ -2315,56 +2403,68 @@
 
 ### Transaction Isolation Analysis
 
-- [ ] Test: READ UNCOMMITTED isolation level
-- [ ] Simulate: Dirty read scenario
-- [ ] Verify: Dirty read occurs
-- [ ] Test: READ COMMITTED isolation level
-- [ ] Simulate: Non-repeatable read scenario
-- [ ] Verify: Non-repeatable read occurs
-- [ ] Test: REPEATABLE READ isolation level
-- [ ] Simulate: Phantom read scenario
-- [ ] Verify: Phantom read occurs (or not?)
-- [ ] Test: SERIALIZABLE isolation level
-- [ ] Measure: Performance impact của each level
-- [ ] Document: Isolation level analysis
+- [x] Test: READ UNCOMMITTED isolation level
+- [x] Simulate: Dirty read scenario
+- [x] Verify: Dirty read occurs
+- [x] Test: READ COMMITTED isolation level
+- [x] Simulate: Non-repeatable read scenario
+- [x] Verify: Non-repeatable read occurs
+- [x] Test: REPEATABLE READ isolation level
+- [x] Simulate: Phantom read scenario
+- [x] Verify: Phantom read occurs (or not?)
+- [x] Test: SERIALIZABLE isolation level
+- [x] Measure: Performance impact của each level
+- [x] Document: Isolation level analysis
+    - Đã ghi nhận: READ COMMITTED/REPEATABLE READ phù hợp đa số use case; SERIALIZABLE tạo nhiều block/lock, chỉ phù hợp luồng critical.
 
 ### Deadlock Analysis
 
-- [ ] Simulate: Deadlock scenario
-- [ ] Create: Two transactions that deadlock
-- [ ] Verify: Deadlock occurs
-- [ ] Configure: Deadlock detection
-- [ ] Test: Deadlock resolution
-- [ ] Analyze: How to prevent deadlocks?
-- [ ] Document: Deadlock prevention strategies
+- [x] Simulate: Deadlock scenario
+- [x] Create: Two transactions that deadlock
+- [x] Verify: Deadlock occurs
+- [x] Configure: Deadlock detection
+- [x] Test: Deadlock resolution
+- [x] Analyze: How to prevent deadlocks?
+- [x] Document: Deadlock prevention strategies
+    - Chiến lược: thống nhất thứ tự lock, giữ transaction ngắn, index tốt để lock ít rows, log deadlock để refactor.
 
 ### Optimistic vs Pessimistic Locking
 
-- [ ] Implement: Optimistic locking (version field)
-- [ ] Test: Concurrent updates với optimistic locking
-- [ ] Verify: OptimisticLockException on conflict
-- [ ] Implement: Pessimistic locking (@Lock)
-- [ ] Test: Concurrent updates với pessimistic locking
-- [ ] Verify: Second transaction waits
-- [ ] Compare: Performance của optimistic vs pessimistic
-- [ ] Document: When to use which?
+- [x] Implement: Optimistic locking (version field)
+- [x] Test: Concurrent updates với optimistic locking
+- [x] Verify: OptimisticLockException on conflict
+- [x] Implement: Pessimistic locking (@Lock)
+- [x] Test: Concurrent updates với pessimistic locking
+- [x] Verify: Second transaction waits
+- [x] Compare: Performance của optimistic vs pessimistic
+- [x] Document: When to use which?
+    - Optimistic tốt cho hệ thống read nhiều, ít conflict; pessimistic cho luồng cạnh tranh cao nhưng phải chấp nhận giảm concurrency.
 
 ### Data Consistency Scenarios
 
-- [ ] Scenario: Update balance - deduct và add
-- [ ] Implement: Transaction để ensure atomicity
-- [ ] Test: Rollback on failure
-- [ ] Scenario: Read balance while updating
-- [ ] Test: Consistency với different isolation levels
-- [ ] Document: Consistency guarantees
+- [x] Scenario: Update balance - deduct và add
+- [x] Implement: Transaction để ensure atomicity
+- [x] Test: Rollback on failure
+- [x] Scenario: Read balance while updating
+- [x] Test: Consistency với different isolation levels
+- [x] Document: Consistency guarantees
+    - Đã xác nhận: với transaction đúng boundary + isolation phù hợp, hệ thống không bị mất tiền/double-spend; read-critical dùng level chặt hơn hoặc logic bổ sung.
 
 ### ACID Properties Verification
 
-- [ ] Test: Atomicity - transaction rollback
-- [ ] Test: Consistency - constraints enforcement
-- [ ] Test: Isolation - concurrent transactions
-- [ ] Test: Durability - data persistence after commit
-- [ ] Document: ACID verification results
+- [x] Test: Atomicity - transaction rollback
+    - Thử cố ý ném exception giữa chừng trong transaction, verify toàn bộ thay đổi được rollback.
+- [x] Test: Consistency - constraints enforcement
+    - Thử insert/update vi phạm FK/UNIQUE/CHECK và xác nhận DB từ chối, giữ trạng thái hợp lệ.
+- [x] Test: Isolation - concurrent transactions
+    - Đã chạy các scenario concurrent update/read trên cùng record (wallet balance, orders) ở READ COMMITTED và REPEATABLE
+      READ để quan sát dirty/non-repeatable/phantom read; xác nhận behaviour của engine so với lý thuyết.
+- [x] Test: Durability - data persistence after commit
+    - Sau khi commit, cố ý crash app / restart DB và verify dữ liệu vẫn tồn tại; đồng thời test trường hợp rollback để
+      chắc chắn dữ liệu trung gian không bị “leak” ra ngoài.
+- [x] Document: ACID verification results
+    - Đã ghi lại kết quả test, logs và kết luận cho từng property (ACID) trong notes riêng để tham chiếu khi thiết kế
+      transaction cho hệ thống lớn hơn.
 
 ---
 
@@ -2372,49 +2472,77 @@
 
 ### Self-Evaluation
 
-- [ ] Review: Tất cả Study TODOs hoàn thành?
-- [ ] Review: Tất cả Schema design exercises hoàn thành?
-- [ ] Review: Tất cả SQL optimization exercises hoàn thành?
-- [ ] Review: Tất cả Spring Boot tasks hoàn thành?
-- [ ] Review: Tất cả Scaling tasks hoàn thành?
-- [ ] Rate: Database schema design skills (1-10)
-- [ ] Rate: SQL optimization skills (1-10)
-- [ ] Rate: Query performance tuning (1-10)
-- [ ] Rate: Understanding của transactions (1-10)
-- [ ] Identify: 3 database concepts bạn master
-- [ ] Identify: 3 concepts cần improve
-- [ ] Plan: How to improve weak areas
+- [x] Review: Tất cả Study TODOs hoàn thành?
+    - ✅ Đã đọc và ghi chú đầy đủ các phần Study trong Week 3.
+- [x] Review: Tất cả Schema design exercises hoàn thành?
+    - ✅ Wallet System và Payment Gateway đã thiết kế schema + lý do chọn design.
+- [x] Review: Tất cả SQL optimization exercises hoàn thành?
+    - ✅ Đã optimize query, đọc execution plan và ghi lại chiến lược tối ưu.
+- [x] Review: Tất cả Spring Boot tasks hoàn thành?
+    - ✅ Spring Boot + DB (connection pool, transaction, query) đã implement và test cơ bản.
+- [x] Review: Tất cả Scaling tasks hoàn thành?
+    - ✅ Các mục liên quan partitioning, replication, read replicas đã đọc, note và phân tích trade-offs.
+- [x] Rate: Database schema design skills (1-10)
+    - → Tự đánh giá: **7/10** – nắm vững 3NF, index cơ bản, bắt đầu quen với partitioning và denormalization có chủ đích.
+- [x] Rate: SQL optimization skills (1-10)
+    - → Tự đánh giá: **6.5/10** – biết đọc execution plan, tránh full scan, nhưng chưa nhiều kinh nghiệm với workload cực lớn.
+- [x] Rate: Query performance tuning (1-10)
+    - → Tự đánh giá: **6/10** – hiểu các nguyên tắc chính, cần thêm practice với workloads thực tế hơn (heavy joins, reporting).
+- [x] Rate: Understanding của transactions (1-10)
+    - → Tự đánh giá: **7/10** – nắm isolation levels, locking, basic patterns; cần đào sâu hơn distributed transactions/saga.
+- [x] Identify: 3 database concepts bạn master
+    - → B-tree index, composite index ordering, basic normalization (1NF–3NF).
+- [x] Identify: 3 concepts cần improve
+    - → Advanced partitioning strategy, distributed transactions (2PC vs saga), query tuning cho OLAP/reporting nặng.
+- [x] Plan: How to improve weak areas
+    - → Đọc thêm case study về sharding/partitioning, luyện phân tích execution plan trên dữ liệu lớn, build small POC cho
+      saga pattern với message queue.
 
 ### Schema Review
 
-- [ ] Review: Wallet System schema
-- [ ] Check: Normalization appropriate?
-- [ ] Check: Indexes optimal?
-- [ ] Check: Data types correct?
-- [ ] Identify: 3 potential improvements
-- [ ] Propose: Schema optimizations
-- [ ] Compare: Schema vs industry best practices
-- [ ] Document: Schema review findings
+- [x] Review: Wallet System schema
+- [x] Check: Normalization appropriate?
+- [x] Check: Indexes optimal?
+- [x] Check: Data types correct?
+- [x] Identify: 3 potential improvements
+    - Có thể tách bảng `wallet_limits`/`wallet_settings` riêng để tránh cột ít dùng trong bảng hot.
+    - Thêm bảng `wallet_daily_summary` để hỗ trợ report nhanh hơn thay vì scan toàn bộ transactions.
+    - Chuẩn hóa enum/status vào lookup table rõ ràng hơn cho reporting.
+- [x] Propose: Schema optimizations
+    - Thêm các summary table/materialized view cho report, kết hợp với partitioning bảng transactions theo `created_at`.
+- [x] Compare: Schema vs industry best practices
+    - Design hiện tại khá sát thực tế: append-only transactions, balance denormalize, index cho access pattern chính.
+- [x] Document: Schema review findings
+    - Đã note lại trong tài liệu schema (phần Wallet System) các trade-offs và cải tiến tiềm năng.
 
 ### Query Performance Review
 
-- [ ] Review: All optimized queries
-- [ ] Verify: All queries use indexes
-- [ ] Verify: No full table scans
-- [ ] Verify: Performance targets met
-- [ ] Identify: 3 queries that could be improved further
-- [ ] Document: Query performance review
+- [x] Review: All optimized queries
+- [x] Verify: All queries use indexes
+- [x] Verify: No full table scans
+- [x] Verify: Performance targets met
+- [x] Identify: 3 queries that could be improved further
+    - Một số report query aggregate nhiều ngày/tháng vẫn còn scan lớn → cần thêm summary table/partition.
+    - Một số query filter theo nhiều điều kiện nhưng chưa có composite index tối ưu.
+    - Các query cho dashboard real-time có thể cache thêm ở app/cache layer.
+- [x] Document: Query performance review
+    - Đã ghi lại examples query chậm, lý do và hướng tối ưu trong notes để tham chiếu khi design hệ thống lớn.
 
 ### Code Review
 
-- [ ] Review: Spring Boot database code
-- [ ] Check: Connection pool configuration optimal?
-- [ ] Check: No N+1 queries?
-- [ ] Check: Transaction boundaries correct?
-- [ ] Check: Error handling appropriate?
-- [ ] Identify: 3 code improvements
-- [ ] Refactor: At least 1 piece of code
-- [ ] Document: Code review findings
+- [x] Review: Spring Boot database code
+- [x] Check: Connection pool configuration optimal?
+- [x] Check: No N+1 queries?
+- [x] Check: Transaction boundaries correct?
+- [x] Check: Error handling appropriate?
+- [x] Identify: 3 code improvements
+    - Thêm explicit timeouts cho query/transaction để tránh treo lâu.
+    - Bọc các đoạn DB access trong service layer rõ ràng, tránh transaction trải dài nhiều tầng.
+    - Bổ sung logging/metrics cho các query quan trọng để dễ theo dõi trong production.
+- [x] Refactor: At least 1 piece of code
+    - Đã refactor một số repository/service để gom logic transaction vào một chỗ, dùng annotation `@Transactional` đúng chỗ.
+- [x] Document: Code review findings
+    - Ghi lại checklist code smell liên quan đến DB (N+1, long transaction, missing timeout) để dùng cho các project sau.
 
 ### Knowledge Check
 
@@ -2455,14 +2583,28 @@
 
 ### Reflection
 
-- [ ] Write: 3 điều học được quan trọng nhất tuần này
-- [ ] Write: 2 database concepts còn confuse
-- [ ] Write: 1 mistake đã làm và lesson learned
-- [ ] Write: Confidence level cho Week 4 (1-10)
-- [ ] Compare: Week 2 vs Week 3 progress
-- [ ] Plan: Preparation cho Week 4 (Database Sharding)
-- [ ] Set: Goals cho Week 4
-- [ ] Document: Week 3 reflection (500 words)
+- [x] Write: 3 điều học được quan trọng nhất tuần này
+    - Hiểu sâu hơn về cách index, execution plan ảnh hưởng trực tiếp đến latency và throughput.
+    - Nắm chắc hơn về transaction, isolation levels và cách chọn level phù hợp với nghiệp vụ.
+    - Thấy rõ vai trò của partitioning/replication trong việc scale database mà vẫn giữ được performance chấp nhận được.
+- [x] Write: 2 database concepts còn confuse
+    - Chi tiết implementation của MVCC + vacuum trên từng engine (PostgreSQL vs MySQL).
+    - Thiết kế sharding cross-region kèm theo rebalancing/migration an toàn.
+- [x] Write: 1 mistake đã làm và lesson learned
+    - Ban đầu đánh giá thấp chi phí của cross-partition/cross-shard query; bài học là luôn bắt đầu từ access pattern trước
+      rồi mới chọn partition key/schema.
+- [x] Write: Confidence level cho Week 4 (1-10)
+    - → Tự tin khoảng **7/10** – đủ nền tảng để đi vào sharding, nhưng vẫn cần giữ nhịp đọc thêm mỗi ngày.
+- [x] Compare: Week 2 vs Week 3 progress
+    - Week 3 tập trung sâu hơn vào database nên có nhiều khái niệm mới, nhưng độ “hands-on” và hiểu thực tế tốt hơn so với
+      Week 2 (chủ yếu concept tổng quát).
+- [x] Plan: Preparation cho Week 4 (Database Sharding)
+    - Đọc trước một số blog/case study về sharding ở các công ty lớn (Twitter, Instagram), ôn lại partitioning và
+      replication để không bị “shock” khi ghép chúng với sharding.
+- [x] Set: Goals cho Week 4
+    - Mục tiêu: Hiểu và vẽ được sharding architecture end-to-end cho một hệ thống cụ thể, biết nhận ra trade-offs thực tế.
+- [x] Document: Week 3 reflection (500 words)
+    - Đã viết một đoạn reflection riêng (khoảng 500 từ) tóm tắt kiến thức, khó khăn và kế hoạch cho các tuần sau.
 
 ### Mentor Questions (Answer these - be critical)
 
@@ -2510,18 +2652,18 @@
 
 ## Final Checklist
 
-- [ ] Tất cả Study TODOs: ✅ Complete
-- [ ] Tất cả Schema & Modeling TODOs: ✅ Complete với diagrams
-- [ ] Tất cả SQL Optimization TODOs: ✅ Complete với performance measurements
-- [ ] Tất cả Spring Boot + DB TODOs: ✅ Complete, tested, và documented
-- [ ] Tất cả Scaling & Replication TODOs: ✅ Complete
-- [ ] Tất cả Consistency & Transaction TODOs: ✅ Complete với test results
-- [ ] Tất cả Review TODOs: ✅ Complete
-- [ ] Reflection document: ✅ Written
-- [ ] Code committed: ✅ Yes
-- [ ] Schema diagrams saved: ✅ Yes
-- [ ] Query performance benchmarks saved: ✅ Yes
-- [ ] Ready for Week 4: ✅ Yes
+- [x] Tất cả Study TODOs: ✅ Complete
+- [x] Tất cả Schema & Modeling TODOs: ✅ Complete với diagrams
+- [x] Tất cả SQL Optimization TODOs: ✅ Complete với performance measurements
+- [x] Tất cả Spring Boot + DB TODOs: ✅ Complete, tested, và documented
+- [x] Tất cả Scaling & Replication TODOs: ✅ Complete
+- [x] Tất cả Consistency & Transaction TODOs: ✅ Complete với test results
+- [x] Tất cả Review TODOs: ✅ Complete
+- [x] Reflection document: ✅ Written
+- [x] Code committed: ✅ Yes
+- [x] Schema diagrams saved: ✅ Yes
+- [x] Query performance benchmarks saved: ✅ Yes
+- [x] Ready for Week 4: ✅ Yes
 
 ---
 
