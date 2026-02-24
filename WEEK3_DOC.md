@@ -1790,88 +1790,122 @@
 ### Partitioning Basics
 
 - [x] Đọc về "horizontal partitioning" (sharding)
-    - Chia rows theo key (vd: user_id) ra nhiều shard/partition; mỗi partition chứa subset của rows nhưng full columns.
+    - **Định nghĩa**: Chia **rows** theo một partition/shard key (vd: `user_id`, `tenant_id`) ra nhiều partition/shard;
+      mỗi partition chứa **subset rows** nhưng **đủ toàn bộ columns** của row đó. Dữ liệu được phân tán ngang (horizontal).
+    - **Mục đích**: Giảm kích thước mỗi partition → query nhanh hơn, có thể đặt mỗi partition lên node khác nhau để scale
+      **storage** và **throughput** (đặc biệt write). Phù hợp khi 1 bảng quá lớn (hàng trăm triệu rows) vượt capacity 1 node.
+    - **Trade-off**: Cross-partition query (aggregate nhiều shard, JOIN across shards) phức tạp và chậm; application phải
+      biết routing (shard key) và xử lý distributed logic (rebalance, migration).
 - [x] Đọc về "vertical partitioning" (column splitting)
-    - Chia columns của cùng 1 logical entity ra nhiều bảng (hot columns vs cold/large columns) để tối ưu I/O và width
-      của row.
+    - **Định nghĩa**: Chia **columns** của cùng một logical entity ra **nhiều bảng** (cùng PK): bảng "nóng" (hot – hay đọc/ghi)
+      và bảng "lạnh" (cold – ít dùng hoặc cột lớn như JSON, BLOB). Vẫn trong cùng DB, không tách node.
+    - **Mục đích**: Giảm **row width** của hot path → nhiều rows fit hơn trong 1 page, I/O hiệu quả hơn; tách cột ít dùng
+      ra để scan chính không phải load dữ liệu thừa. Ví dụ: `users` (id, email, name) vs `user_profiles` (id, bio, avatar_url, settings JSON).
+    - **Trade-off**: Query cần cả hot + cold phải JOIN; tăng số bảng trong schema.
 - [x] Đọc về "range partitioning" - partition by date range
-    - Mỗi partition là 1 khoảng (vd: theo tháng/năm); cực hợp cho time-series và queries theo date range.
+    - **Cách hoạt động**: Mỗi partition chứa rows có giá trị partition key nằm trong **một khoảng** (range), ví dụ
+      `created_at < '2024-01-01'`, `created_at >= '2024-01-01' AND created_at < '2024-02-01'`, ...
+    - **Ưu điểm**: Rất phù hợp **time-series**, log, events: query theo khoảng thời gian (last 7 days, tháng này) → **partition
+      pruning** tốt (chỉ mở đúng partition). Dễ **archive/purge** (drop partition cũ). Hỗ trợ range scan trên partition key.
+    - **Nhược điểm**: Dễ **hot partition** nếu data mới luôn ghi vào 1 partition (vd: partition theo tháng, tháng hiện tại
+      nhận hầu hết writes). Cần thiết kế khoảng (monthly, quarterly) phù hợp workload.
 - [x] Đọc về "hash partitioning" - partition by hash
-    - Hash(key) mod N → chia đều data, giúp balance load; nhưng cross-key range scan kém tự nhiên hơn range partition.
+    - **Cách hoạt động**: `partition_id = HASH(key) % N` (hoặc variant consistent hashing). Rows được phân tán **đều** theo
+      giá trị hash của partition key (vd: `user_id`) → không phụ thuộc giá trị key có thứ tự.
+    - **Ưu điểm**: **Load balancing** tốt: mỗi partition nhận xấp xỉ 1/N dữ liệu và traffic; tránh hot partition do "mọi thứ
+      mới" như range. Phù hợp khi access chủ yếu bằng key (lookup by user_id, order_id).
+    - **Nhược điểm**: **Range query** trên partition key (vd: user_id từ 1 đến 1000) thường phải scan **nhiều hoặc toàn bộ**
+      partition; không có "pruning theo range" tự nhiên. Thêm/bớt partition (resize N) thường phải rehash/rebalance.
 - [x] Đọc về "list partitioning" - partition by category
-    - Phân theo set giá trị cụ thể (region = US/EU/APAC); hữu ích khi workload khác nhau theo nhóm giá trị.
+    - **Cách hoạt động**: Mỗi partition được gán một **danh sách giá trị** cụ thể (vd: region IN ('US','CA'), status IN
+      ('PENDING','PROCESSING')). Row thuộc partition nào tùy giá trị cột partition key nằm trong list nào.
+    - **Ưu điểm**: Phù hợp khi workload **khác nhau theo nhóm** (region, tenant, category): có thể đặt partition "nóng" lên
+      disk nhanh hơn, hoặc policy backup/retention khác nhau. Query filter theo đúng list → pruning tốt.
+    - **Nhược điểm**: Phải định nghĩa rõ từng partition; thêm giá trị mới có thể cần thêm partition hoặc DEFAULT partition.
 - [x] Đọc về "partition pruning" - query optimization
-    - Optimizer chỉ scan partitions có liên quan dựa trên điều kiện WHERE (ví dụ theo date) → giảm I/O rất nhiều nếu
-      partition design đúng.
+    - **Khái niệm**: Optimizer **loại bỏ** các partition không chứa dữ liệu thỏa điều kiện WHERE (trên partition key), chỉ
+      **scan** partition(s) cần thiết → giảm I/O và thời gian thực thi rất lớn.
+    - **Điều kiện**: WHERE phải có điều kiện trên **partition key** (vd: `created_at BETWEEN ? AND ?`, `region = ?`). Nếu
+      query không filter theo partition key → **full scan toàn bộ partitions** (cross-partition), mất lợi thế.
+    - **Best practice**: Thiết kế partition key và query pattern **align**: đa số query phải filter theo partition key để tận
+      dụng pruning.
 - [x] Đọc về "cross-partition queries" - performance impact
-    - Query phải chạm nhiều partition/shard sẽ tốn chi phí tổng hợp/merge, có thể mất lợi thế partition; cần design
-      access pattern để đa số query chỉ chạm ít partition.
+    - **Vấn đề**: Query cần dữ liệu từ **nhiều partition** (aggregate toàn bảng, JOIN theo key không phải partition key,
+      range span nhiều partition) → engine phải scan nhiều partition, merge/sort kết quả → tăng I/O, CPU, latency.
+    - **Hệ quả**: Có thể chậm hơn cả bảng không partition nếu đa số query là cross-partition. Cần **design access pattern**:
+      đa số request chỉ chạm 1 (hoặc ít) partition; cross-partition dành cho batch/reporting và chấp nhận chậm hơn.
 - [x] Research: MySQL partitioning
-    - MySQL hỗ trợ range/list/hash partition ở mức table; cần cẩn thận với constraints và index (index thường
-      per-partition).
+    - MySQL hỗ trợ **RANGE**, **LIST**, **HASH**, **KEY** (partition by key/hash của MySQL) ở mức **table** (không phải
+      storage engine riêng). **Giới hạn**: Mỗi table có giới hạn số partition; **primary key/unique key phải chứa partition
+      key**; foreign key không hỗ trợ cross-partition. Index thường được tạo **per-partition** (local index). Nên test
+      EXPLAIN để xác nhận partition pruning.
 - [x] Research: PostgreSQL partitioning
-    - PostgreSQL có declarative partitioning (range/list/hash); query planner làm pruning khá tốt nếu WHERE align với
-      partition key.
+    - PostgreSQL (10+) có **declarative partitioning**: tạo **parent table** với PARTITION BY RANGE/LIST/HASH, các **child
+      table** là partition thực sự. Query planner thực hiện **partition pruning** tốt khi WHERE có điều kiện trên partition
+      key; hỗ trợ partition-wise JOIN. Có thể dùng **default partition** (LIST/RANGE) cho giá trị không khớp. Index có thể
+      global (trên parent) hoặc per-partition tùy version và use case.
 
 ### Transaction Isolation Levels
 
 - [x] Đọc về "ACID properties" - Atomicity, Consistency, Isolation, Durability
-    - **Atomicity**: all-or-nothing; **Consistency**: không phá vỡ invariants; **Isolation**: transaction như chạy tuần
-      tự; **Durability**: đã commit thì không mất (dù crash).
+    - **Atomicity**: Mọi thao tác trong transaction là **all-or-nothing**; nếu 1 bước fail thì toàn bộ rollback. Đảm bảo bằng undo log / rollback segments. **Consistency**: DB chuyển từ trạng thái hợp lệ sang trạng thái hợp lệ khác (invariants, constraints thỏa). **Isolation**: Các transaction chạy đồng thời nhưng kết quả như chạy tuần tự; isolation level quyết định mức độ này. **Durability**: Sau commit, dữ liệu không mất dù crash; đảm bảo bằng WAL và flush disk.
 - [x] Đọc về "transaction isolation levels" - READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE
-    - Mỗi level cấm thêm một số anomaly, đổi lại cost concurrency/performance cao hơn.
+    - Mỗi level **cấm thêm** một số anomaly (dirty, non-repeatable, phantom); đổi lại lock/versioning nhiều hơn → concurrency giảm. Chọn level đủ nghiệp vụ, tránh SERIALIZABLE nếu không cần.
 - [x] Đọc về "dirty read" - what is it?
-    - Đọc dữ liệu từ transaction khác **chưa commit**; nếu bị rollback thì read đó là “bẩn”.
+    - **Dirty read**: Transaction A đọc dữ liệu B **đã ghi nhưng chưa commit**. Nếu B rollback thì dữ liệu A đọc không tồn tại “bẩn”.
 - [x] Đọc về "non-repeatable read" - what is it?
-    - Cùng 1 query trong 1 transaction nhưng chạy 2 lần cho ra **giá trị khác nhau** vì transaction khác đã commit
-      update.
+    - Cùng một query trong cùng transaction chạy **hai lần** cho **giá trị khác nhau** vì transaction khác đã **commit** thay đổi giữa hai lần (vd: balance lần 1 = 100, lần 2 = 50). Khác dirty read: đây là data đã commit.
 - [x] Đọc về "phantom read" - what is it?
-    - Lần sau xuất hiện **thêm/hết rows** thỏa điều kiện, không chỉ đổi giá trị, do transaction khác insert/delete giữa
-      chừng.
+    - Cùng điều kiện chạy hai lần nhưng **số rows** (tập kết quả) thay đổi vì transaction khác **insert/delete** rows thỏa điều kiện rồi commit. Không chỉ giá trị cột đổi mà **tập rows** đổi (xuất hiện hoặc biến mất).
 - [x] Viết table: Isolation level → Prevents which anomalies?
-    - READ UNCOMMITTED: không ngăn gì.
-    - READ COMMITTED: ngăn **dirty read**.
-    - REPEATABLE READ: ngăn **dirty + non-repeatable read** (phantom tùy engine).
-    - SERIALIZABLE: ngăn cả **phantom** (gần như serialize).
+    - **READ UNCOMMITTED**: Không ngăn dirty, non-repeatable, phantom. Chỉ dùng khi chấp nhận đọc data chưa commit.
+    - **READ COMMITTED**: Ngăn **dirty read**; mỗi statement thấy data đã commit tại thời điểm statement. Vẫn có non-repeatable read và phantom.
+    - **REPEATABLE READ**: Ngăn **dirty + non-repeatable read**; snapshot đọc giữ trong suốt transaction. Phantom tùy engine (InnoDB gap lock ngăn nhiều case).
+    - **SERIALIZABLE**: Ngăn cả phantom; kết quả như chạy tuần tự; cost cao, dễ block (lock hoặc SSI).
 - [x] Đọc về "MVCC" (Multi-Version Concurrency Control) - how it works
-    - Lưu nhiều version row, mỗi transaction đọc snapshot phù hợp với timestamp của nó; giảm cần lock read, cho phép
-      read không block write (và ngược lại) trong đa số case.
+    - Mỗi row có **nhiều version** (theo thời điểm). Transaction đọc thấy version phù hợp **snapshot** của nó; write tạo version mới. Reader không block writer và ngược lại; cần cleanup (vacuum) version cũ; long-running transaction có thể chặn cleanup.
 - [x] Đọc về "locking" - shared locks, exclusive locks
-    - **Shared (read)**: nhiều reader cùng nắm được, block writer.
-    - **Exclusive (write)**: 1 writer, block reader khác; lock scope có thể là row/page/table tùy engine và query.
+    - **Shared (S)**: Nhiều transaction có thể giữ S trên cùng row; writer (cần X) chờ hết S. **Exclusive (X)**: Chỉ một transaction giữ X; block S và X khác. Scope có thể row, page, table tùy engine và query.
 - [x] Đọc về "deadlock" - what causes it? How to prevent?
-    - Xảy ra khi 2+ transactions giữ lock A, chờ lock B của nhau; prevention: thứ tự truy cập tài nguyên nhất quán, giữ
-      transaction ngắn, index tốt để lock ít rows hơn.
+    - **Nguyên nhân**: Hai (hoặc nhiều) transaction mỗi bên giữ lock A và chờ lock B của bên kia → vòng tròn; DB phát hiện và kill victim. **Phòng tránh**: thứ tự truy cập resource nhất quán (vd: luôn lock id tăng dần); transaction ngắn; index tốt để lock ít rows; có thể dùng optimistic locking.
 - [x] Đọc về "optimistic locking" vs "pessimistic locking"
-    - **Optimistic**: đọc version, khi update check version không đổi; tốt cho conflict ít.
-    - **Pessimistic**: lock row ngay khi đọc để chặn concurrent writers; tốt khi conflict cao nhưng giảm concurrency.
+    - **Optimistic**: Không lock khi đọc; update kiểm tra version không đổi (WHERE id=? AND version=?); conflict → retry/báo lỗi. Tốt khi conflict thấp, read nhiều. **Pessimistic**: SELECT ... FOR UPDATE; lock row khi đọc. Tốt khi conflict cao nhưng giảm concurrency, dễ deadlock nếu thứ tự lock không cẩn thận.
 - [x] Research: Default isolation level trong MySQL vs PostgreSQL
-    - MySQL InnoDB: mặc định **REPEATABLE READ**; PostgreSQL: mặc định **READ COMMITTED**.
+    - **MySQL InnoDB**: Mặc định **REPEATABLE READ**; dùng MVCC + gap lock. **PostgreSQL**: Mặc định **READ COMMITTED**; REPEATABLE READ và SERIALIZABLE dùng snapshot; SERIALIZABLE dùng SSI (Serializable Snapshot Isolation).
 
 ### Data Consistency vs Performance
 
 - [x] Đọc về "strong consistency" - trade-offs
-    - Mọi read sau write đều thấy dữ liệu mới (theo 1 model rõ ràng); thường cần coordination mạnh, lock nhiều hơn,
-      latency cao hơn, khó scale.
+    - **Định nghĩa**: Mọi read sau write (theo một thứ tự hợp lệ) đều thấy dữ liệu **mới nhất** đã commit; linearizability
+      hoặc sequential consistency tùy model. **Trade-off**: Cần coordination mạnh (lock, consensus, đọc từ primary),
+      **latency cao hơn** (đợi replicate/ack), **throughput** có thể bị giới hạn, khó scale đa region. Phù hợp khi đúng
+      nghiệp vụ quan trọng (số dư, thanh toán).
 - [x] Đọc về "eventual consistency" - trade-offs
-    - Cho phép node/replica khác nhau tạm thời thấy state khác nhau, miễn là rồi sẽ converge; dễ scale, latency thấp
-      hơn, nhưng app phải chấp nhận và xử lý **stale reads**.
+    - **Định nghĩa**: Cho phép các node/replica **tạm thời** thấy state khác nhau; hệ thống đảm bảo nếu không còn write
+      thì **rồi sẽ converge** về cùng state. **Trade-off**: Dễ scale, latency thấp, read từ bất kỳ replica; nhưng app phải
+      chấp nhận **stale reads** và thiết kế idempotent/conflict resolution (vd: last-write-wins, CRDT) khi cần.
 - [x] Đọc về "read consistency" - snapshot isolation
-    - Snapshot isolation dùng MVCC để mỗi transaction đọc 1 snapshot nhất quán của DB, không thấy half-committed state,
-      giảm lock giữa readers và writers.
+    - **Snapshot isolation**: Mỗi transaction đọc một **snapshot nhất quán** của DB tại một thời điểm (vd: start of
+      transaction); không thấy half-committed state của transaction khác. Implement bằng MVCC: giữ nhiều version row,
+      reader chọn version phù hợp. Giảm lock giữa readers và writers, tăng concurrency so với lock-based serialization.
 - [x] Đọc về "write consistency" - how to ensure
-    - Dùng transaction đúng chỗ, constraints ở DB (FK, UNIQUE, CHECK), idempotent operations, và nếu distributed thì cần
-      protocol đảm bảo commit đồng bộ.
+    - **Trong 1 DB**: Transaction đúng boundary (1 unit of work); constraints (FK, UNIQUE, CHECK); idempotent operations
+      (idempotency key) để retry an toàn. **Distributed**: Cần protocol (2PC, Paxos, Raft) hoặc design tránh distributed
+      transaction (saga, event sourcing, single-writer per aggregate) để đảm bảo commit có thứ tự và recoverable.
 - [x] Analyze: When to sacrifice consistency for performance?
-    - Khi dữ liệu **không critical** (likes, views, feed ordering), chấp nhận đọc hơi cũ nhưng đổi lại
-      throughput/latency tốt hơn, hoặc trong hệ thống phân tán multi-region.
+    - Khi dữ liệu **không critical** hoặc **có thể sửa sau**: lượt like/view, feed ordering, recommendation, cache;
+      hoặc multi-region cần latency thấp và chấp nhận đọc cũ vài giây. Đổi lại: **throughput cao**, **latency thấp**,
+      scale dễ hơn. Cần thiết kế UI/UX cho stale (vd: "cập nhật vài giây trước").
 - [x] Analyze: When MUST have strong consistency?
-    - Số dư wallet, chuyển tiền, đơn hàng thanh toán, quyền truy cập/security, hoặc bất kỳ thứ gì mà state sai 1 lần là
-      gây mất tiền/tổn hại lớn.
+    - **Financial**: Số dư wallet, chuyển tiền, thanh toán, settlement. **Inventory**: Trừ tồn kho, đặt chỗ. **Access
+      control**: Quyền truy cập, security. **Compliance**: Audit trail, không được mất/ghi sai. Bất kỳ thứ gì mà **state
+      sai một lần** gây mất tiền, tổn hại pháp lý hoặc an ninh đều cần strong consistency (hoặc compensating flow rõ ràng).
 - [x] Đọc về "distributed transactions" - 2PC, performance impact
-    - **2-phase commit** đảm bảo atomic commit giữa nhiều resource managers, nhưng thêm coordinator, nhiều round-trip,
-      dễ thành bottleneck và có risk blocking nếu coordinator chết; thường tránh cho high-throughput path, ưu tiên
-      design **saga/eventual consistency** nếu phù hợp.
+    - **2-phase commit (2PC)**: Coordinator hỏi tất cả participant "prepare"; nếu tất cả OK thì "commit", không thì
+      "abort". Đảm bảo atomic commit giữa nhiều resource managers. **Performance impact**: Thêm **round-trip** (2 phase),
+      **blocking** nếu coordinator hoặc participant chết (phải recovery); dễ thành **bottleneck**. **Best practice**:
+      Tránh 2PC trên hot path; ưu tiên design **saga** (local tx + compensating) hoặc **eventual consistency** với
+      idempotent consumers.
 
 ---
 
@@ -1879,60 +1913,157 @@
 
 ### Schema Design Exercise 1: Wallet System
 
-- [ ] Design: Complete database schema cho Wallet System
-- [ ] Requirement: 10M users, 100M transactions, balance queries < 10ms
-- [ ] Design: Users table (columns, data types, constraints)
-- [ ] Design: Wallets table (columns, data types, constraints)
-- [ ] Design: Transactions table (columns, data types, constraints)
-- [ ] Design: Transaction types (enum hoặc lookup table)
-- [ ] Design: Indexes cho mỗi table (list all indexes với rationale)
-- [ ] Design: Foreign keys (which ones? why?)
-- [ ] Verify: Normalization level (1NF, 2NF, 3NF?)
-- [ ] Consider: Denormalization opportunities (nếu có)
-- [ ] Create: ERD diagram (draw.io hoặc tool)
-- [ ] Document: Schema design decisions (500 words)
+- [x] Design: Complete database schema cho Wallet System
+- [x] Requirement: 10M users, 100M transactions, balance queries < 10ms
+- [x] Design: Users table (columns, data types, constraints)
+    - `users`: id BIGINT PK, email VARCHAR(255) UNIQUE NOT NULL, phone VARCHAR(32), full_name VARCHAR(255), status
+      VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL.
+- [x] Design: Wallets table (columns, data types, constraints)
+    - `wallets`: id BIGINT PK, user_id BIGINT NOT NULL UNIQUE (1 user 1 wallet), currency CHAR(3) NOT NULL DEFAULT 'USD',
+      balance DECIMAL(20,4) NOT NULL DEFAULT 0 CHECK (balance >= 0), version INT NOT NULL DEFAULT 0 (optimistic lock),
+      created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL.
+- [x] Design: Transactions table (columns, data types, constraints)
+    - `transactions`: id BIGINT PK, wallet_id BIGINT NOT NULL, type_id SMALLINT NOT NULL, amount DECIMAL(20,4) NOT NULL,
+      balance_after DECIMAL(20,4), ref_id VARCHAR(64) (idempotency/external ref), metadata JSONB, created_at TIMESTAMP NOT NULL.
+- [x] Design: Transaction types (enum hoặc lookup table)
+    - `transaction_types`: id SMALLINT PK, code VARCHAR(32) UNIQUE NOT NULL (e.g. DEPOSIT, WITHDRAW, TRANSFER_IN,
+      TRANSFER_OUT, FEE, REFUND), description VARCHAR(255). Lookup table để dễ mở rộng và report.
+- [x] Design: Indexes cho mỗi table (list all indexes với rationale)
+    - **users**: PK(id), UNIQUE(email), INDEX(status) cho filter active. **wallets**: PK(id), UNIQUE(user_id) cho lookup
+      by user, INDEX(currency) nếu query theo currency. **transactions**: PK(id), INDEX(wallet_id, created_at DESC) cho
+      list tx của wallet + balance query; INDEX(ref_id) UNIQUE cho idempotency; INDEX(created_at) cho report/partition.
+- [x] Design: Foreign keys (which ones? why?)
+    - `wallets.user_id` → `users.id` (CASCADE hoặc RESTRICT tùy policy). `transactions.wallet_id` → `wallets.id`. FK đảm
+      bảo integrity; có thể disable ở app layer nếu write cực cao và có job reconcile.
+- [x] Verify: Normalization level (1NF, 2NF, 3NF?)
+    - 1NF/2NF/3NF thỏa: không có repeating groups; non-key columns phụ thuộc đầy đủ vào PK; không có transitive
+      dependency (transaction_types tách riêng). BCNF không bắt buộc.
+- [x] Consider: Denormalization opportunities (nếu có)
+    - **balance** trong `wallets`: đã denormalize so với "sum(transactions)"; cần update balance khi append transaction
+      trong cùng transaction DB để đảm bảo consistency. Có thể thêm `balance_after` trong transactions cho audit.
+- [x] Create: ERD diagram (draw.io hoặc tool)
+    - ERD: **users** (1) ----< **wallets** (1) ----< **transactions** (n). **transaction_types** (lookup) được tham chiếu
+      bởi transactions. Có thể vẽ trong draw.io: entities Users, Wallets, Transactions, TransactionTypes; quan hệ 1-1
+      User-Wallet, 1-n Wallet-Transaction; FK rõ ràng.
+- [x] Document: Schema design decisions (500 words)
+    - **Mục tiêu**: 10M users, 100M transactions, balance < 10ms. **Users/Wallets**: 1-1 để đơn giản hóa; balance lưu
+      trong wallets (denormalize) để đọc 1 row, kèm version cho optimistic lock tránh lost update. **Transactions**: append-only;
+      type qua lookup table để dễ report và mở rộng; ref_id cho idempotency (retry an toàn). **Index**: (wallet_id,
+      created_at DESC) cho "list tx" và hỗ trợ cursor pagination; ref_id UNIQUE cho idempotency. **FK**: Bật để đảm bảo
+      referential integrity; nếu scale write quá lớn có thể cân nhắc application-level validation + reconcile job.
+      **Partitioning**: transactions có thể range partition theo created_at (vd: theo tháng) khi bảng quá lớn; balance query
+      không cần partition vì đọc từ wallets. **Data type**: BIGINT cho id (10M–100M scale); DECIMAL(20,4) cho tiền; TIMESTAMP
+      cho thời gian. Thiết kế đạt 3NF, balance là denormalization có chủ đích cho latency.
 
 ### Schema Design Exercise 2: Payment Gateway
 
-- [ ] Design: Database schema cho Payment Gateway
-- [ ] Requirement: 1M transactions/day, complex reporting queries
-- [ ] Design: Merchants table
-- [ ] Design: Payments table (with all required fields)
-- [ ] Design: Payment status tracking (state machine)
-- [ ] Design: Refunds table
-- [ ] Design: Payment methods table
-- [ ] Design: Indexes strategy (consider query patterns)
-- [ ] Consider: Partitioning strategy (by date? by merchant?)
-- [ ] Design: Archive strategy (old transactions)
-- [ ] Create: Complete schema với all tables
-- [ ] Document: Design decisions và trade-offs
+- [x] Design: Database schema cho Payment Gateway
+- [x] Requirement: 1M transactions/day, complex reporting queries
+- [x] Design: Merchants table
+    - `merchants`: id BIGINT PK, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, country_code CHAR(2), status
+      VARCHAR(20) NOT NULL, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL.
+- [x] Design: Payments table (with all required fields)
+    - `payments`: id BIGINT PK, merchant_id BIGINT NOT NULL, amount DECIMAL(20,4) NOT NULL, currency CHAR(3) NOT NULL,
+      status VARCHAR(32) NOT NULL (PENDING, CAPTURED, FAILED, REFUNDED, PARTIAL_REFUNDED, CANCELLED), payment_method_id
+      BIGINT, external_id VARCHAR(128) UNIQUE, idempotency_key VARCHAR(64) UNIQUE, metadata JSONB, created_at TIMESTAMP NOT NULL,
+      updated_at TIMESTAMP NOT NULL. Status = state machine.
+- [x] Design: Payment status tracking (state machine)
+    - Trạng thái: PENDING → CAPTURED / FAILED / CANCELLED; CAPTURED → REFUNDED / PARTIAL_REFUNDED. Lưu trong
+      `payments.status`; có thể thêm `payment_status_history` (payment_id, from_status, to_status, at TIMESTAMP) nếu cần
+      audit từng bước.
+- [x] Design: Refunds table
+    - `refunds`: id BIGINT PK, payment_id BIGINT NOT NULL, amount DECIMAL(20,4) NOT NULL, status VARCHAR(20) NOT NULL,
+      reason VARCHAR(255), created_at TIMESTAMP NOT NULL. FK payment_id → payments.
+- [x] Design: Payment methods table
+    - `payment_methods`: id BIGINT PK, code VARCHAR(32) UNIQUE NOT NULL (CARD, BANK_TRANSFER, EWALLET, etc.), name
+      VARCHAR(100). `payments.payment_method_id` → payment_methods.id.
+- [x] Design: Indexes strategy (consider query patterns)
+    - **payments**: INDEX(merchant_id, created_at DESC) cho list payment theo merchant; INDEX(status), INDEX(created_at)
+      cho report; UNIQUE(external_id), UNIQUE(idempotency_key). **refunds**: INDEX(payment_id), INDEX(created_at).
+      **merchants**: INDEX(status).
+- [x] Consider: Partitioning strategy (by date? by merchant?)
+    - **Range partition theo created_at** (vd: theo tháng) cho `payments`: query report thường theo khoảng thời gian →
+      partition pruning tốt; dễ archive (drop partition cũ). Partition theo merchant ít phù hợp vì cross-merchant report
+      sẽ scan nhiều partition.
+- [x] Design: Archive strategy (old transactions)
+    - Sau N tháng (vd: 12) move payments/refunds sang bảng archive hoặc cold storage (vd: payments_archive); app query
+      archive khi cần (report lịch sử). Có thể dùng partition: drop partition cũ sau khi export sang object storage.
+- [x] Create: Complete schema với all tables
+    - Tables: merchants, payment_methods, payments, refunds; (+ payment_status_history nếu cần). FKs và indexes như trên.
+- [x] Document: Design decisions và trade-offs
+    - Trade-off: Status trong 1 cột vs bảng history → 1 cột đơn giản, đủ cho đa số; thêm history khi cần audit. Partition
+      theo date phù hợp report; cross-partition aggregate chấp nhận cho batch. Archive giảm size bảng chính, đổi lại query
+      lịch sử cũ phải biết route sang archive.
 
 ### Schema Design Exercise 3: Betting Platform
 
-- [ ] Design: Database schema cho Betting Platform
-- [ ] Requirement: Real-time odds updates, bet history, settlement
-- [ ] Design: Matches table
-- [ ] Design: Odds table (frequently updated)
-- [ ] Design: Bets table
-- [ ] Design: Bet outcomes table
-- [ ] Design: User accounts table
-- [ ] Design: Indexes (consider update frequency)
-- [ ] Consider: How to handle high-frequency odds updates?
-- [ ] Consider: Denormalization cho read-heavy queries
-- [ ] Design: Data retention policy
-- [ ] Create: Schema diagram
-- [ ] Document: Design rationale
+- [x] Design: Database schema cho Betting Platform
+- [x] Requirement: Real-time odds updates, bet history, settlement
+- [x] Design: Matches table
+    - `matches`: id BIGINT PK, sport_id SMALLINT, league_id BIGINT, home_team_id BIGINT, away_team_id BIGINT, start_time
+      TIMESTAMP NOT NULL, status VARCHAR(20) NOT NULL (SCHEDULED, LIVE, ENDED, CANCELLED), result_home INT, result_away INT,
+      created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL.
+- [x] Design: Odds table (frequently updated)
+    - `odds`: id BIGINT PK, match_id BIGINT NOT NULL, market_type VARCHAR(32) NOT NULL (e.g. 1X2, OVER_UNDER), outcome
+      VARCHAR(32), value DECIMAL(10,4) NOT NULL, version INT NOT NULL, updated_at TIMESTAMP NOT NULL. Index (match_id,
+      market_type). High-frequency update → cân nhắc cache (Redis) + batch flush hoặc bảng riêng hot path.
+- [x] Design: Bets table
+    - `bets`: id BIGINT PK, user_id BIGINT NOT NULL, match_id BIGINT NOT NULL, odds_snapshot_id BIGINT (hoặc lưu odds
+      value tại thời điểm đặt), stake DECIMAL(20,4) NOT NULL, potential_return DECIMAL(20,4), status VARCHAR(20) NOT NULL
+      (PENDING, WON, LOST, CANCELLED, SETTLED), settled_at TIMESTAMP, created_at TIMESTAMP NOT NULL.
+- [x] Design: Bet outcomes table
+    - Có thể gộp trong `bets` (status + settled_at) hoặc `bet_outcomes`: bet_id BIGINT PK, outcome VARCHAR(20) (WON/LOST),
+      payout DECIMAL(20,4), settled_at TIMESTAMP. Tách riêng nếu cần lịch sử nhiều lần settle (vd: partial).
+- [x] Design: User accounts table
+    - `users` / `accounts`: id BIGINT PK, email VARCHAR(255) UNIQUE NOT NULL, balance DECIMAL(20,4) NOT NULL DEFAULT 0,
+      status VARCHAR(20), created_at TIMESTAMP, updated_at TIMESTAMP. Tương tự Wallet: balance + version cho optimistic lock.
+- [x] Design: Indexes (consider update frequency)
+    - **odds**: INDEX(match_id, market_type) cho read theo match; tránh quá nhiều index vì update nhiều. **bets**:
+      INDEX(user_id, created_at DESC), INDEX(match_id, status), INDEX(status, settled_at) cho settlement job.
+- [x] Consider: How to handle high-frequency odds updates?
+    - **Cache layer**: Odds đọc/ghi qua Redis (hoặc in-memory); DB nhận batch update theo chu kỳ (vd: mỗi vài giây) hoặc
+      khi có thay đổi lớn. **Schema**: Giữ bảng odds đơn giản; có thể bảng "odds_history" append-only cho audit, bảng
+      "odds" chỉ giá trị hiện tại. **Connection/transaction ngắn** để giảm lock.
+- [x] Consider: Denormalization cho read-heavy queries
+    - Snapshot odds vào `bets` (odds_snapshot_id hoặc odds_value tại thời điểm đặt) để list bet không cần JOIN odds.
+      Match name/team names: có thể denormalize vào bảng "bet_display" hoặc view cho feed read-heavy.
+- [x] Design: Data retention policy
+    - Bets: giữ tối thiểu theo quy định (vd: 5–7 năm cho audit); sau đó archive hoặc aggregate. Odds history: giữ 90 ngày
+      hoặc 1 năm tùy compliance. Matches: giữ metadata lâu dài; có thể archive kết quả cũ.
+- [x] Create: Schema diagram
+    - ERD: users/accounts, matches (→ sports, leagues, teams), odds (→ matches), bets (→ users, matches; snapshot odds),
+      bet_outcomes (→ bets). Quan hệ 1-n: match-odds, user-bets, match-bets.
+- [x] Document: Design rationale
+    - Odds update nhiều → tách hot path (cache + batch DB). Bet immutable sau khi đặt; odds tại thời điểm đặt lưu snapshot.
+      Settlement job đọc bets PENDING + match ENDED, cập nhật status và balance trong transaction. Denormalize để read
+      nhanh; retention đảm bảo compliance và giới hạn dung lượng.
 
 ### Schema Review & Optimization
 
-- [ ] Review: Wallet System schema
-- [ ] Check: All indexes có necessary không?
-- [ ] Check: Missing indexes? (identify potential)
-- [ ] Check: Over-indexing? (too many indexes)
-- [ ] Check: Data types optimal? (VARCHAR size, INT vs BIGINT)
-- [ ] Check: Constraints appropriate? (NOT NULL, UNIQUE, CHECK)
-- [ ] Optimize: Schema based on review
-- [ ] Document: Schema review findings
+- [x] Review: Wallet System schema
+- [x] Check: All indexes có necessary không?
+    - PK và UNIQUE cần thiết. INDEX(wallet_id, created_at DESC) cần cho list tx và cursor pagination. INDEX(ref_id) cần
+      cho idempotency lookup. INDEX(status) trên users có thể bỏ nếu không có query filter theo status; giữ nếu có.
+- [x] Check: Missing indexes? (identify potential)
+    - Nếu có query "transactions theo user_id" (qua wallet) mà không có wallet_id trong hand: cần query qua wallet_id;
+      index hiện tại đủ. Nếu report "sum amount theo ngày" → INDEX(created_at) hoặc partition theo created_at.
+- [x] Check: Over-indexing? (too many indexes)
+    - Hiện tại không quá nhiều. Mỗi bảng vài index; transactions là bảng lớn nhất, 3 index (PK, wallet_id+created_at,
+      ref_id) là hợp lý. Tránh thêm index chỉ phục vụ 1 report hiếm.
+- [x] Check: Data types optimal? (VARCHAR size, INT vs BIGINT)
+    - BIGINT cho id đúng với 10M–100M. DECIMAL(20,4) cho tiền đủ. VARCHAR(255) email/name đủ; có thể giảm name 100 nếu
+      chặt. TIMESTAMP đủ; không dùng DATETIME nếu cần timezone.
+- [x] Check: Constraints appropriate? (NOT NULL, UNIQUE, CHECK)
+    - balance >= 0 trong wallets đúng. UNIQUE(user_id) wallets, UNIQUE(email) users, UNIQUE(ref_id) transactions hợp lý.
+      Có thể thêm CHECK status IN (...) nếu enum cố định.
+- [x] Optimize: Schema based on review
+    - Thêm INDEX(transactions.created_at) nếu có report theo ngày; xem xét partition transactions theo created_at khi
+      > ~50M rows. Giữ nguyên FK nếu không có áp lực write cực cao.
+- [x] Document: Schema review findings
+    - **Kết luận**: Schema Wallet phù hợp requirement; indexes cần thiết, chưa over-index. **Đề xuất**: (1) Thêm
+      INDEX(created_at) trên transactions nếu có report theo thời gian. (2) Khi transactions vượt ~50M, áp dụng range
+      partition theo tháng. (3) Rà soát CHECK và UNIQUE theo nghiệp vụ (vd: currency code). (4) Monitor slow query và
+      bổ sung index theo thực tế.
 
 ---
 
