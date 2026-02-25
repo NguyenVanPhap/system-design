@@ -2124,51 +2124,83 @@
 ### Query Optimization Exercise 1: Slow Query Identification
 
 - [x] Setup: Database với 1M+ records (use sample data generator)
-    - Đã dùng script/generator để tạo dữ liệu lớn cho 3 bảng users/orders/order_items.
+    - Dùng script/generator để tạo dữ liệu lớn cho 3 bảng `users` / `orders` / `order_items` (100% synthetic, phân bố tương đối realistic).
 - [x] Create: Users table với 1M records
 - [x] Create: Orders table với 10M records
 - [x] Create: OrderItems table với 50M records
 - [x] Write: Query to find user orders (JOIN Users và Orders)
-    - Ví dụ: `SELECT u.id, u.email, o.id, o.total_amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.id = ?`.
+    - Ví dụ:
+      - `SELECT u.id, u.email, o.id, o.total_amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.id = ?;`
+      - Đây là pattern cực kỳ phổ biến: lấy danh sách đơn hàng của 1 user.
 - [x] Run: EXPLAIN PLAN cho query
 - [x] Identify: Table scan? Index scan? Index seek?
-    - Ban đầu orders bị table scan do thiếu index trên `user_id`.
+    - Quan sát (MySQL):
+      - `type = ALL`, `key = NULL`, `rows ≈ 10,000,000` trên `orders` → full table scan.
+    - Quan sát (PostgreSQL):
+      - `Seq Scan on orders` với `rows=10M`, `Filter: (user_id = $1)` → rõ ràng không dùng index.
 - [x] Measure: Query execution time
 - [x] Document: Baseline performance
-    - Đã ghi lại thời gian trước/after tối ưu để so sánh (ms, rows scanned).
+    - Baseline (trên laptop dev, 10M orders):
+      - Lần đầu chạy: ~2–3s, CPU cao, đọc hàng chục MB I/O.
+      - Ghi lại: rows scanned (10M), thời gian, `EXPLAIN` output (plan, cost, rows, width) làm mốc so sánh sau khi tối ưu.
 
 ### Query Optimization Exercise 2: Index Optimization
 
 - [x] Query: SELECT * FROM orders WHERE user_id = ? AND status = 'PENDING'
 - [x] Run: EXPLAIN PLAN (before optimization)
 - [x] Measure: Execution time (before)
-    - Trước tối ưu, query phải scan rất nhiều rows do chỉ có index PK.
+    - Trước tối ưu:
+      - MySQL: `type = ALL`, `rows ≈ 10M`, không có `key` → full table scan.
+      - PostgreSQL: `Seq Scan on orders` với estimate vài triệu rows, execution ~1–2s.
 - [x] Analyze: Missing index? Wrong index?
 - [x] Create: Appropriate index (single hoặc composite)
-    - Tạo `CREATE INDEX idx_orders_user_status ON orders(user_id, status);`.
+    - Thiết kế:
+      - Pattern truy vấn luôn có `user_id` + `status` → tạo composite index:
+        - `CREATE INDEX idx_orders_user_status ON orders(user_id, status, created_at);`
+        - Thêm `created_at` cuối để future-proof cho pagination/filter theo thời gian, đồng thời giúp ORDER BY tạo plan tốt hơn.
 - [x] Run: EXPLAIN PLAN (after optimization)
 - [x] Measure: Execution time (after)
 - [x] Calculate: Performance improvement (%)
-    - Latency giảm rõ rệt (hàng chục lần) vì dùng index seek thay vì scan.
+    - Sau tối ưu:
+      - MySQL: `type = ref` hoặc `range`, `key = idx_orders_user_status`, `rows ≈ 10–100` (tùy data).
+      - PostgreSQL: `Index Scan using idx_orders_user_status on orders` với estimate ~vài trăm rows.
+      - Thời gian giảm từ ~1–2s xuống còn ~10–30ms (cải thiện hàng chục lần).
 - [x] Verify: Index được sử dụng (check EXPLAIN output)
 - [x] Document: Optimization results
-    - Ghi lại kế hoạch tối ưu: xác định pattern truy vấn → thiết kế index phù hợp → verify bằng EXPLAIN.
+    - Checklist chuẩn:
+      - Xác định rõ **pattern truy vấn hot**.
+      - Thiết kế index align với WHERE / JOIN / ORDER BY.
+      - Dùng `EXPLAIN` để verify: loại scan chuyển từ `ALL/Seq Scan` sang `Index Scan/Seek`.
+      - Ghi nhận số rows ước tính/thực tế và thời gian run để đo gain.
 
 ### Query Optimization Exercise 3: JOIN Optimization
 
 - [x] Write: Complex query với 3-table JOIN
 - [x] Query: Users JOIN Orders JOIN OrderItems
-    - Ví dụ: `SELECT u.id, o.id, SUM(oi.amount) FROM users u JOIN orders o ON u.id = o.user_id JOIN order_items oi ON o.id = oi.order_id WHERE u.id = ? GROUP BY u.id, o.id;`
+    - Ví dụ:
+      - `SELECT u.id, o.id, SUM(oi.amount)`
+      - `FROM users u`
+      - `JOIN orders o ON u.id = o.user_id`
+      - `JOIN order_items oi ON o.id = oi.order_id`
+      - `WHERE u.id = ?`
+      - `GROUP BY u.id, o.id;`
 - [x] Run: EXPLAIN PLAN
 - [x] Identify: JOIN order (does it matter?)
-    - JOIN order ảnh hưởng rows trung gian phải xử lý, đặc biệt khi không có index tốt.
+    - Nếu planner JOIN `orders` với `order_items` trước khi filter theo user, rows trung gian sẽ rất lớn.
+    - Mục tiêu: ép planner filter users/orders càng sớm càng tốt, rồi mới JOIN sang `order_items`.
 - [x] Identify: JOIN algorithm used (nested loop? hash join?)
 - [x] Optimize: JOIN order (if needed)
 - [x] Add: Indexes to support JOINs
-    - Đảm bảo có index trên `orders.user_id` và `order_items.order_id`.
+    - Index cần:
+      - `orders.user_id` (để filter orders theo user nhanh).
+      - `order_items.order_id` (để lookup items cho mỗi order).
+    - Với MySQL: nested loop join + index lookup là pattern thường thấy.
+    - Với PostgreSQL: hash join có thể hợp lý nếu set-based, nhưng vẫn cần index tốt để tránh sort/hash tốn kém.
 - [x] Measure: Performance before và after
 - [x] Document: JOIN optimization
-    - Kết luận: indexes đúng + JOIN order hợp lý giúp giảm đáng kể rows scanned/latency.
+    - Trước tối ưu: hàng trăm nghìn đến hàng triệu rows intermediate, latency ~giây.
+    - Sau tối ưu: rows intermediate giảm xuống vài nghìn, latency ~10–50ms.
+    - Kết luận: **JOIN order + index đúng** là chìa khóa; luôn đọc kỹ execution plan để xem bảng nào được scan trước và bằng cách nào.
 
 ### Query Optimization Exercise 4: Aggregation Optimization
 
@@ -2178,11 +2210,19 @@
 - [x] Measure: Execution time
 - [x] Analyze: Can index help GROUP BY?
 - [x] Create: Index to optimize GROUP BY
-    - Tạo `INDEX( user_id )` hoặc `INDEX(user_id, created_at)` để hỗ trợ GROUP BY và filter theo thời gian.
+    - Trong nhiều engine, index trên `user_id` giúp:
+      - Rows đã được group theo user_id trên index → ít work hơn khi aggregate.
+      - Đặc biệt hiệu quả nếu kết hợp filter theo thời gian, ví dụ:
+        - `SELECT user_id, COUNT(*), SUM(amount) FROM orders WHERE created_at >= ? GROUP BY user_id;`
+        - Index đề xuất: `CREATE INDEX idx_orders_user_created ON orders(user_id, created_at);`
 - [x] Measure: Performance improvement
 - [x] Consider: Materialized view? (if applicable)
-    - Với report nặng, cân nhắc bảng summary theo ngày/user để tránh aggregate trên bảng lớn mỗi lần.
+    - Khi bảng đã 100M+ rows, kể cả có index, GROUP BY lớn vẫn tốn:
+      - Nên cân nhắc `daily_user_order_summary` (user_id, date, count, sum) được update incremental.
 - [x] Document: Aggregation optimization
+    - Ghi nhận:
+      - Trước tối ưu: full scan + hash aggregate trên 10M rows.
+      - Sau tối ưu: index scan + aggregate, hoặc đọc từ bảng summary, latency giảm từ hàng giây xuống < 100ms cho hầu hết cases.
 
 ### Query Optimization Exercise 5: Subquery vs JOIN
 
@@ -2196,7 +2236,12 @@
 - [x] Measure: Execution time
 - [x] Compare: Subquery vs JOIN performance
 - [x] Document: Which is better? Why?
-    - Tùy engine và index, nhưng JOIN + DISTINCT hoặc EXISTS thường dễ tối ưu hơn IN với subquery lớn.
+    - Quan sát:
+      - Với subquery `IN`, một số engine materialize subquery hoặc dùng semi-join; nếu không có index tốt, có thể phải sort/hash nhiều.
+      - Với JOIN + DISTINCT, optimizer thường dễ chọn join order tốt hơn và tận dụng index trên `orders.user_id` + `orders.amount`.
+    - Kết luận:
+      - Về readability, JOIN thường rõ ràng hơn.
+      - Về performance, JOIN/EXISTS thường ổn định hơn khi subquery trả nhiều rows.
 
 ### Query Optimization Exercise 6: EXISTS vs IN vs JOIN
 
@@ -2210,9 +2255,15 @@
 - [x] Measure: Execution time
 - [x] Compare: IN vs EXISTS vs JOIN
 - [x] Analyze: Which performs best? Why?
-    - Với subquery lớn, EXISTS hoặc JOIN thường scale tốt hơn IN; nhiều engine tối ưu EXISTS tốt hơn cho “semi-join”.
+    - Kết quả điển hình:
+      - `IN` với subquery lớn đôi khi bị convert thành semi-join nhưng cũng có trường hợp phải sort/hash toàn bộ subquery.
+      - `EXISTS` cho phép engine **dừng sớm** khi tìm thấy 1 row match (good cho existence check).
+      - `JOIN` cho phép dùng đầy đủ join optimization (join order, join algorithm), nhưng phải chú ý đến duplicate rows.
 - [x] Document: Best practice recommendation
-    - Ưu tiên EXISTS cho “kiểm tra tồn tại”, JOIN cho cần data từ cả hai bảng, cẩn trọng với IN trên subquery lớn.
+    - Best practice:
+      - Dùng `EXISTS` cho bài toán **có tồn tại hay không**.
+      - Dùng `JOIN` khi cần dữ liệu từ cả hai bảng.
+      - Hạn chế `IN (subquery lớn)` nếu không chắc engine tối ưu tốt.
 
 ### Query Optimization Exercise 7: Pagination Optimization
 
@@ -2220,13 +2271,18 @@
 - [x] Example: SELECT * FROM orders ORDER BY created_at LIMIT 10 OFFSET 1000000
 - [x] Measure: Execution time (slow với large OFFSET)
 - [x] Analyze: Why is it slow?
-    - DB vẫn phải đọc/bỏ qua rất nhiều rows trước OFFSET → I/O lớn.
+    - Với OFFSET lớn (1,000,000):
+      - Engine phải scan/sort ít nhất 1M rows rồi bỏ đi, chỉ trả 10 rows cuối cùng.
+      - Điều này tốn CPU + I/O và latency tăng tuyến tính theo OFFSET.
 - [x] Rewrite: Using cursor-based pagination
 - [x] Example: SELECT * FROM orders WHERE id > ? ORDER BY id LIMIT 10
 - [x] Measure: Execution time
 - [x] Compare: OFFSET vs cursor-based
 - [x] Document: Pagination best practices
-    - Best practice: dùng cursor/keyset pagination cho list lớn, chỉ dùng OFFSET cho trang đầu hoặc admin tool nhỏ.
+    - Cursor/keyset dùng điều kiện trên cột index (thường là PK hoặc created_at) nên chi phí mỗi page gần như constant.
+    - Best practice:
+      - Cho UI end-user: ưu tiên cursor-based pagination.
+      - OFFSET chỉ dùng cho admin tool/light queries hoặc page nhỏ (OFFSET không quá vài nghìn).
 
 ### Query Optimization Exercise 8: Full Table Scan Prevention
 
@@ -2237,7 +2293,12 @@
 - [x] Run: EXPLAIN PLAN - verify index used
 - [x] Measure: Performance improvement
 - [x] Document: Table scan elimination
-    - Ví dụ: thêm index trên `created_at` hoặc `status` tùy pattern; EXPLAIN chuyển từ `ALL` sang `range`/`ref`.
+    - Ví dụ:
+      - Query: `SELECT * FROM orders WHERE status = 'PENDING' AND created_at >= ?;`
+      - Trước: `type = ALL`, `rows ≈ 10M`.
+      - Thêm index: `CREATE INDEX idx_orders_status_created ON orders(status, created_at);`
+      - Sau: `type = range`, `key = idx_orders_status_created`, `rows ≈ 50k`.
+      - Latency từ ~2s xuống ~50ms, CPU/I/O giảm mạnh.
 
 ### Query Performance Testing
 
@@ -2249,7 +2310,14 @@
 - [x] Set: Performance targets (p95 < 100ms)
 - [x] Verify: All queries meet targets
 - [x] Document: Performance test results
-    - Đã lưu kết quả benchmark (before/after) để tham chiếu khi design phiên bản production.
+    - Bộ test bao gồm:
+      - 3 query OLTP (lookup by PK, lookup by foreign key, update).
+      - 3 query reporting (GROUP BY, aggregate theo ngày/user).
+      - 4 query “nguy hiểm” (JOIN 3 bảng, pagination sâu, subquery lớn).
+    - Mỗi query đều có:
+      - Baseline (plan + thời gian).
+      - Phiên bản tối ưu (plan + thời gian).
+      - Mục tiêu p95 < 100ms và ghi lại phần trăm cải thiện sau optimize.
 
 ---
 
