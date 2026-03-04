@@ -1,23 +1,30 @@
 # Week 5 – Caching & Performance Optimization
 
-> **Mentor Note**: Caching là một trong những optimizations quan trọng nhất. Nhưng cache sai cách sẽ làm system chậm hơn, không nhanh hơn. Bạn phải MEASURE mọi thứ. Cache hit rate, latency improvement, memory usage - tất cả phải có numbers. Không có "có vẻ nhanh hơn". Phải có benchmarks, metrics, và proof. Production systems cần performance, không cần assumptions.
+> **Mentor Note**: Caching là một trong những optimizations quan trọng nhất. Nhưng cache sai cách sẽ làm system chậm
+> hơn, không nhanh hơn. Bạn phải MEASURE mọi thứ. Cache hit rate, latency improvement, memory usage - tất cả phải có
+> numbers. Không có "có vẻ nhanh hơn". Phải có benchmarks, metrics, và proof. Production systems cần performance, không
+> cần assumptions.
 
 ---
 
 ## Study TODOs
 
 ### Caching Fundamentals
+
 - [x] Đọc "Designing Data-Intensive Applications" Chapter 3 - Storage and Retrieval (caching sections)
     - **Key takeaways (DDIA Ch3 – Caching):**
         - **Caching layers**: CPU cache (L1/L2/L3) → Memory → Disk → Network; mỗi layer chậm hơn 10-100x nhưng rẻ hơn.
         - **Cache hit vs miss**: Hit = data có trong cache (nhanh), Miss = phải fetch từ storage chậm hơn.
         - **Cache replacement policies**: LRU (Least Recently Used), LFU (Least Frequently Used), FIFO, Random.
-        - **Write policies**: Write-through (write cache + storage), Write-back (write cache, flush sau), Write-around (skip cache).
+        - **Write policies**: Write-through (write cache + storage), Write-back (write cache, flush sau), Write-around (
+          skip cache).
         - **Cache invalidation**: TTL, event-driven, explicit delete, version-based.
-        - **Insight**: Cache chỉ hiệu quả khi **hit rate cao** (>80%) và **access pattern có locality** (temporal/spatial).
+        - **Insight**: Cache chỉ hiệu quả khi **hit rate cao** (>80%) và **access pattern có locality** (
+          temporal/spatial).
 - [x] Định nghĩa chính xác: Cache hit, cache miss, cache hit rate
     - **Cache hit**: Request tìm data trong cache và **tìm thấy** → trả về từ cache (nhanh, latency thấp).
-    - **Cache miss**: Request tìm data trong cache nhưng **không tìm thấy** → phải fetch từ storage chậm hơn (database, disk, API).
+    - **Cache miss**: Request tìm data trong cache nhưng **không tìm thấy** → phải fetch từ storage chậm hơn (database,
+      disk, API).
     - **Cache hit rate**: Tỷ lệ phần trăm requests được phục vụ từ cache.
         - **Công thức**: `Hit Rate = (Cache Hits / Total Requests) × 100%`
         - **Target**: Production systems thường target >80% hit rate để có hiệu quả rõ rệt.
@@ -44,7 +51,8 @@
         - So với không cache: 100ms → improvement = **79.2%**
 - [x] Đọc về "cache hierarchy" - L1, L2, L3 caches
     - **CPU Cache Hierarchy** (từ nhanh → chậm, nhỏ → lớn):
-        - **L1 Cache**: Nhanh nhất (~1ns), nhỏ nhất (32-64KB), nằm trong CPU core, chia thành L1i (instruction) và L1d (data).
+        - **L1 Cache**: Nhanh nhất (~1ns), nhỏ nhất (32-64KB), nằm trong CPU core, chia thành L1i (instruction) và L1d (
+          data).
         - **L2 Cache**: Nhanh (~3ns), trung bình (256KB-1MB), có thể shared giữa cores hoặc per-core.
         - **L3 Cache**: Chậm hơn (~10ns), lớn hơn (8-32MB), shared giữa tất cả cores trong CPU.
         - **RAM**: Chậm hơn nhiều (~100ns), lớn (GB), ngoài CPU.
@@ -54,6 +62,185 @@
         - **L3**: Database với query cache - ~10-100ms
         - **L4**: Disk storage - ~1-10ms
     - **Principle**: Data được access nhiều nhất nên ở cache level cao nhất (L1), ít access hơn ở level thấp hơn.
+
+    ---
+    
+    # 🧠 I. CPU Cache Hierarchy
+    
+    Ví dụ CPU 4 cores:
+    
+    ```
+                        ┌───────────────────────────────┐
+                        │             CPU               │
+                        │                               │
+       ┌──────────────┐ │  Core 1     Core 2     Core 3     Core 4
+       │              │ │  ┌──────┐   ┌──────┐   ┌──────┐   ┌──────┐
+       │              │ │  │ L1i  │   │ L1i  │   │ L1i  │   │ L1i  │
+       │              │ │  │ L1d  │   │ L1d  │   │ L1d  │   │ L1d  │
+       │              │ │  └───┬──┘   └───┬──┘   └───┬──┘   └───┬──┘
+       │              │ │      │          │          │          │
+       │              │ │     L2         L2         L2         L2
+       │              │ │ (per-core)  (per-core)  (per-core)  (per-core)
+       │              │ │        \        |         |        /
+       │              │ │         └──────────────┬──────────────┘
+       │              │ │                        │
+       │              │ │                     L3 Cache
+       │              │ │              (Shared toàn bộ cores)
+       │              │ │                        │
+       └──────────────┘ │                        │
+                        └────────────────────────┬──────────────┘
+                                                 │
+                                               RAM
+                                                 │
+                                                Disk
+    ```
+    
+    ---
+    
+    ## 🔹 Giải thích theo dòng chảy khi CPU đọc data
+    
+    ```
+    CPU register
+       ↓
+    L1 (≈ 1ns, 32-64KB)
+       ↓ (miss)
+    L2 (≈ 3ns, 256KB-1MB)
+       ↓ (miss)
+    L3 (≈ 10ns, 8-32MB)
+       ↓ (miss)
+    RAM (≈ 100ns)
+       ↓
+    Disk (milliseconds)
+    ```
+    
+    ### Điểm quan trọng:
+    
+    * L1: riêng từng core
+      * L2: thường per-core
+      * L3: shared toàn CPU
+      * RAM: ngoài CPU
+      * Disk: cực chậm
+    
+    ---
+    
+    # 🏗 II. Application Cache Hierarchy (Backend thực tế)
+    
+    Giờ mình map tư duy đó sang hệ thống backend kiểu bạn đang làm (Spring + DB + Redis + high traffic):
+    
+    ```
+                        ┌──────────────────────────┐
+                        │      Application Node    │
+                        │   (Spring Boot instance) │
+                        │                          │
+                        │   L1: In-memory Cache    │
+                        │   (Caffeine / Guava)     │
+                        └──────────────┬───────────┘
+                                       │
+                                       ▼
+                            L2: Distributed Cache
+                            (Redis / Memcached)
+                                       │
+                                       ▼
+                               L3: Database
+                             (MySQL / Postgres)
+                                       │
+                                       ▼
+                                 L4: Disk Storage
+                             (SSD / Cloud EBS)
+    ```
+    
+    ---
+    
+    ## 🔹 Flow khi API được gọi
+    
+    ```
+    Client request
+       ↓
+    App L1 (local cache, ~1-10µs)
+       ↓ miss
+    Redis L2 (~1-5ms)
+       ↓ miss
+    Database (~10-100ms)
+       ↓
+    Disk (~1-10ms)
+    ```
+    
+    ---
+    
+    # 🧩 Mapping CPU ↔ Application
+    
+    | CPU Level | Application Equivalent      | Ý nghĩa                    |
+    |-----------|-----------------------------|----------------------------|
+    | L1        | In-memory cache (Caffeine)  | Nhanh nhất, local          |
+    | L2        | Redis                       | Shared giữa nhiều app node |
+    | L3        | Database buffer/query cache | Shared data layer          |
+    | RAM       | DB memory pages             |                            |
+    | Disk      | Physical storage            | Chậm nhất                  |
+    
+    ---
+    
+    # 🎯 Nếu triển khai thực tế hệ thống lớn (VD: affiliate / trading)
+    
+    Ví dụ 3 app nodes:
+    
+    ```
+                    ┌───────────────┐
+                    │   Load Balancer│
+                    └───────┬───────┘
+                            │
+           ┌────────────────┼────────────────┐
+           ▼                ▼                ▼
+     ┌───────────┐   ┌───────────┐   ┌───────────┐
+     │ App Node1 │   │ App Node2 │   │ App Node3 │
+     │ L1 Cache  │   │ L1 Cache  │   │ L1 Cache  │
+     └─────┬─────┘   └─────┬─────┘   └─────┬─────┘
+           └──────────────┬───────────────┘
+                          ▼
+                      Redis Cluster
+                          ▼
+                     Primary DB
+                          ▼
+                     Replica DB
+                          ▼
+                         Disk
+    ```
+    
+    ---
+    
+    # ⚡ So sánh tốc độ tương đối
+    
+    ```
+    L1 App Cache      → microseconds
+    Redis             → milliseconds
+    DB Query          → tens of milliseconds
+    Disk              → milliseconds (random I/O)
+    ```
+    
+    CPU thì:
+    
+    ```
+    L1 → 1ns
+    L2 → 3ns
+    L3 → 10ns
+    RAM → 100ns
+    Disk → 1,000,000ns+
+    ```
+    
+    Chênh lệch cấp số nhân.
+    
+    ---
+    
+    # 🧠 Principle quan trọng (cả 2 hệ giống nhau)
+    
+    > Data access càng thường xuyên → phải nằm càng gần CPU / application.
+    
+    Trong hệ thống lớn:
+    
+    * Hot data → L1
+      * Warm data → Redis
+      * Cold data → DB
+      * Archive → Disk / S3
+
 - [x] Đọc về "locality of reference" - spatial và temporal
     - **Temporal Locality**: Data được access gần đây có khả năng được access lại sớm.
         - **Ví dụ**: User profile được load → có thể được access lại trong vài phút.
@@ -119,6 +306,7 @@
         - **ROI**: Nếu cache giảm 50% DB load → tiết kiệm DB costs > memory costs → worth it.
 
 ### Cache Patterns Deep Dive
+
 - [x] Đọc về "Cache-Aside" pattern (Lazy Loading)
     - **Cache-Aside (Lazy Loading)**: Application tự quản lý cache, không có sự tham gia của cache trong write flow.
     - **Flow**:
@@ -274,18 +462,20 @@
         4. **Crash recovery**: Cần mechanism để recover pending writes sau khi restart.
         5. **Monitoring required**: Phải monitor queue size, flush rate để tránh backlog.
 - [x] Compare: Cache-Aside vs Write-Through vs Write-Behind (10 criteria)
-    | Criteria | Cache-Aside | Write-Through | Write-Behind |
-    |----------|-------------|---------------|--------------|
-    | **Write Latency** | Medium (DB only) | High (Cache + DB) | Low (Cache only) |
-    | **Read Latency** | Medium (cache miss = 2 trips) | Low (cache always populated) | Low (cache always populated) |
-    | **Consistency** | Eventual (stale possible) | Strong (always sync) | Eventual (async write) |
-    | **Complexity** | Low | Medium | High |
-    | **Data Safety** | High (DB is source of truth) | High (both written) | Medium (risk if cache crash) |
-    | **Cache Hit Rate** | Depends on access pattern | High (writes populate cache) | High (writes populate cache) |
-    | **Storage Load** | High (every read miss hits DB) | High (every write hits DB) | Low (writes batched) |
-    | **Failure Handling** | Simple (cache down = fallback) | Complex (both must succeed) | Complex (async queue recovery) |
-    | **Use Case** | Read-heavy, infrequent writes | Strong consistency required | Write-heavy, can accept eventual consistency |
-    | **Implementation** | Easy | Medium | Hard (needs queue, retry) |
+  | Criteria | Cache-Aside | Write-Through | Write-Behind |
+  |----------|-------------|---------------|--------------|
+  | **Write Latency** | Medium (DB only) | High (Cache + DB) | Low (Cache only) |
+  | **Read Latency** | Medium (cache miss = 2 trips) | Low (cache always populated) | Low (cache always populated) |
+  | **Consistency** | Eventual (stale possible) | Strong (always sync) | Eventual (async write) |
+  | **Complexity** | Low | Medium | High |
+  | **Data Safety** | High (DB is source of truth) | High (both written) | Medium (risk if cache crash) |
+  | **Cache Hit Rate** | Depends on access pattern | High (writes populate cache) | High (writes populate cache) |
+  | **Storage Load** | High (every read miss hits DB) | High (every write hits DB) | Low (writes batched) |
+  | **Failure Handling** | Simple (cache down = fallback) | Complex (both must succeed) | Complex (async queue
+  recovery) |
+  | **Use Case** | Read-heavy, infrequent writes | Strong consistency required | Write-heavy, can accept eventual
+  consistency |
+  | **Implementation** | Easy | Medium | Hard (needs queue, retry) |
 - [x] Research: Real-world examples của mỗi pattern
     - **Cache-Aside Examples:**
         1. **Facebook/Meta**: User profiles, posts - cache-aside với Memcached.
@@ -322,6 +512,7 @@
         5. **Temporary data loss acceptable**: Có thể mất một số writes nếu cache crash (non-critical data).
 
 ### Cache Invalidation Strategies
+
 - [x] Đọc về "TTL" (Time-To-Live) invalidation
     - **TTL (Time-To-Live)**: Cache key tự động expire sau một khoảng thời gian cố định.
     - **How it works**: Khi set cache, specify TTL (vd: 1 hour, 24 hours). Sau TTL, key tự động bị xóa.
@@ -342,7 +533,7 @@
         5. **TTL tuning**: Phải chọn TTL phù hợp - quá ngắn → miss nhiều, quá dài → stale data.
 - [x] Đọc về "event-driven invalidation"
     - **Event-driven invalidation**: Khi data được update ở source (DB), publish event → cache subscribe và invalidate.
-    - **How it works**: 
+    - **How it works**:
         1. Application update DB → publish "data updated" event.
         2. Cache service subscribe event → delete cache key.
     - **Implementation**: Redis Pub/Sub, Message Queue (Kafka, RabbitMQ), Event Bus.
@@ -374,8 +565,9 @@
     - **Implementation**: Cache key format `{entity}:{id}:v{version}`, version stored in DB hoặc metadata store.
     - **Use cases**: Data có versioning, cần support multiple versions, A/B testing.
 - [x] Đọc về "cache stampede" problem
-    - **Cache Stampede (Cache Miss Storm)**: Khi cache key expire, nhiều requests cùng lúc miss → tất cả query DB → DB overload.
-    - **Scenario**: 
+    - **Cache Stampede (Cache Miss Storm)**: Khi cache key expire, nhiều requests cùng lúc miss → tất cả query DB → DB
+      overload.
+    - **Scenario**:
         - Popular key expire (vd: trending products).
         - 1000 requests cùng lúc → tất cả miss cache.
         - 1000 requests cùng query DB → DB overload, latency spike.
@@ -387,7 +579,8 @@
         - **Effect**: Keys expire ở thời điểm khác nhau → tránh đồng loạt expire.
     2. **Mutex Lock (Single Request Load)**:
         - Khi cache miss, chỉ 1 request được phép load từ DB, các request khác wait.
-        - **Implementation**: Distributed lock (Redis SET NX) → chỉ 1 request acquire lock → load DB → populate cache → release lock.
+        - **Implementation**: Distributed lock (Redis SET NX) → chỉ 1 request acquire lock → load DB → populate cache →
+          release lock.
     3. **Cache Warming**:
         - Pre-load hot data vào cache trước khi expire.
         - **Implementation**: Background job refresh cache trước khi TTL hết (vd: refresh khi còn 10% TTL).
@@ -398,11 +591,12 @@
         - Khi cache hit nhưng gần expire → trigger background refresh.
         - **Implementation**: Return stale data ngay, refresh async → không block request.
 - [x] Đọc về "thundering herd" problem
-    - **Thundering Herd**: Khi cache miss, nhiều requests cùng lúc query DB → database connection pool exhaustion, DB overload.
-    - **Difference với Cache Stampede**: 
+    - **Thundering Herd**: Khi cache miss, nhiều requests cùng lúc query DB → database connection pool exhaustion, DB
+      overload.
+    - **Difference với Cache Stampede**:
         - **Cache Stampede**: Nhiều keys expire cùng lúc.
         - **Thundering Herd**: Một key miss, nhiều requests cùng query DB.
-    - **Scenario**: 
+    - **Scenario**:
         - Popular endpoint, cache miss (hoặc cache down).
         - 1000 concurrent requests → tất cả query DB.
         - Database connection pool = 100 → 900 requests block/wait → timeout.
@@ -423,15 +617,18 @@
         - Return stale data hoặc default value thay vì query DB khi overload.
         - **Implementation**: Check cache age, nếu < max_stale_time → return stale data.
 - [x] Compare: Invalidation strategies (5 criteria)
-    | Criteria | TTL | Event-driven | Explicit | Version-based |
-    |----------|-----|--------------|----------|---------------|
-    | **Consistency** | Eventual (stale trong TTL) | Strong (invalidate ngay) | Strong (manual control) | Strong (version check) |
-    | **Complexity** | Low | High (need event infra) | Medium | Medium-High |
-    | **Latency** | Low (no coordination) | Medium (event delay) | Low (direct delete) | Low (version check) |
-    | **Memory Efficiency** | Medium (waste until expire) | High (invalidate when needed) | High (invalidate when needed) | Medium (old versions exist) |
-    | **Use Case** | Static/semi-static data | Real-time updates | Manual control needed | Versioned data |
+  | Criteria | TTL | Event-driven | Explicit | Version-based |
+  |----------|-----|--------------|----------|---------------|
+  | **Consistency** | Eventual (stale trong TTL) | Strong (invalidate ngay) | Strong (manual control) | Strong (version
+  check) |
+  | **Complexity** | Low | High (need event infra) | Medium | Medium-High |
+  | **Latency** | Low (no coordination) | Medium (event delay) | Low (direct delete) | Low (version check) |
+  | **Memory Efficiency** | Medium (waste until expire) | High (invalidate when needed) | High (invalidate when
+  needed) | Medium (old versions exist) |
+  | **Use Case** | Static/semi-static data | Real-time updates | Manual control needed | Versioned data |
 
 ### Redis Data Structures
+
 - [x] Đọc về Redis String - use cases
     - **Redis String**: Basic key-value store, value có thể là string, number, hoặc binary data (max 512MB).
     - **Commands**: `SET`, `GET`, `INCR`, `DECR`, `APPEND`, `STRLEN`.
@@ -505,22 +702,23 @@
         4. **Real-time analytics**: Stream processing, event streams.
         5. **Pub/Sub alternative**: More reliable than Pub/Sub (persistent messages).
 - [x] Compare: Data structures (when to use which?)
-    | Structure | When to Use | Example |
-    |-----------|-------------|---------|
-    | **String** | Simple key-value, counters, sessions | `user:123`, `page:views:100` |
-    | **Hash** | Object với nhiều fields, partial updates | `user:123` → `{name, email, age}` |
-    | **List** | Ordered collection, queues, feeds | Activity feed, message queue |
-    | **Set** | Unique items, tags, relationships | User tags, friends list |
-    | **Sorted Set** | Ranked data, leaderboards, time-series | Game leaderboard, events by time |
-    | **Bitmap** | Boolean flags, activity tracking | Daily active users, feature flags |
-    | **HyperLogLog** | Approximate unique count | Unique visitors (approximate) |
-    | **Streams** | Message queues, event logs | Activity logs, event sourcing |
+  | Structure | When to Use | Example |
+  |-----------|-------------|---------|
+  | **String** | Simple key-value, counters, sessions | `user:123`, `page:views:100` |
+  | **Hash** | Object với nhiều fields, partial updates | `user:123` → `{name, email, age}` |
+  | **List** | Ordered collection, queues, feeds | Activity feed, message queue |
+  | **Set** | Unique items, tags, relationships | User tags, friends list |
+  | **Sorted Set** | Ranked data, leaderboards, time-series | Game leaderboard, events by time |
+  | **Bitmap** | Boolean flags, activity tracking | Daily active users, feature flags |
+  | **HyperLogLog** | Approximate unique count | Unique visitors (approximate) |
+  | **Streams** | Message queues, event logs | Activity logs, event sourcing |
 - [x] Research: Memory efficiency của mỗi structure
     - **String**: ~40-50 bytes overhead per key + value size. **Inefficient** cho small values.
     - **Hash**: ~40 bytes overhead + (field_count × ~40 bytes) + values. **Efficient** cho objects với nhiều fields.
     - **List**: ~40 bytes overhead + (element_count × ~40 bytes) + values. **Efficient** cho sequential data.
     - **Set**: ~40 bytes overhead + (element_count × ~40 bytes) + values. **Efficient** cho unique collections.
-    - **Sorted Set**: ~40 bytes overhead + (element_count × ~80 bytes) + values + scores. **Less efficient** nhưng cần cho ranking.
+    - **Sorted Set**: ~40 bytes overhead + (element_count × ~80 bytes) + values + scores. **Less efficient** nhưng cần
+      cho ranking.
     - **Bitmap**: ~40 bytes overhead + (bit_count / 8) bytes. **Very efficient** cho boolean flags (1 bit per item).
     - **HyperLogLog**: ~12KB fixed size cho 2^64 elements. **Extremely efficient** cho cardinality estimation.
     - **Streams**: ~40 bytes overhead + message size. **Efficient** cho append-only logs.
@@ -535,8 +733,10 @@
     - **Streams**: O(1) XADD, O(N) XREAD. **Fast** cho append, efficient cho streaming.
 
 ### Cache Problems & Solutions
+
 - [x] Đọc về "cache breakdown" (cache miss storm)
-    - **Cache Breakdown**: Khi cache key expire hoặc bị delete, nhiều requests cùng lúc miss → tất cả query DB → DB overload.
+    - **Cache Breakdown**: Khi cache key expire hoặc bị delete, nhiều requests cùng lúc miss → tất cả query DB → DB
+      overload.
     - **Scenario**: Popular key expire → 1000 requests miss → 1000 DB queries → DB crash.
     - **Impact**: Database overload, application latency spike, cascading failure.
 - [x] Analyze: What causes cache breakdown?
@@ -552,7 +752,8 @@
     4. **Never expire hot keys**: Hot keys không set TTL, chỉ invalidate khi update.
     5. **Graceful degradation**: Return stale data hoặc default value khi DB overload.
 - [x] Đọc về "cache penetration" (query non-existent data)
-    - **Cache Penetration**: Query data không tồn tại trong DB → cache miss → query DB → không có data → không cache → lần sau lại miss → loop.
+    - **Cache Penetration**: Query data không tồn tại trong DB → cache miss → query DB → không có data → không cache →
+      lần sau lại miss → loop.
     - **Scenario**: Attacker query random user IDs không tồn tại → mỗi request miss cache + query DB → DB overload.
     - **Impact**: Wasted DB queries, cache không giúp gì, DB load cao.
 - [x] Analyze: What causes cache penetration?
@@ -569,7 +770,8 @@
     5. **Whitelist/Blacklist**: Maintain list valid IDs → reject invalid IDs ngay.
 - [x] Đọc về "hot key" problem
     - **Hot Key**: Một key được access quá nhiều → Redis instance handling key đó bị overload (CPU, network).
-    - **Scenario**: Popular product page → single key `product:123` nhận 10K requests/second → Redis CPU 90% → latency spike.
+    - **Scenario**: Popular product page → single key `product:123` nhận 10K requests/second → Redis CPU 90% → latency
+      spike.
     - **Impact**: Redis CPU bottleneck, network bottleneck, latency spike cho tất cả requests.
 - [x] Analyze: What causes hot keys?
     1. **Popular content**: Trending products, viral posts, breaking news.
@@ -579,7 +781,8 @@
     5. **Application bug**: Infinite loop query same key.
 - [x] Research: Solutions cho hot keys (local cache, sharding, etc.)
     1. **Local cache (L1 cache)**: Application-level cache (Caffeine, Guava) → giảm requests tới Redis.
-    2. **Key sharding**: Split hot key thành nhiều keys (vd: `product:123:shard0`, `product:123:shard1`) → distribute load.
+    2. **Key sharding**: Split hot key thành nhiều keys (vd: `product:123:shard0`, `product:123:shard1`) → distribute
+       load.
     3. **Read replica**: Route reads tới replica → giảm load master.
     4. **Pre-computation**: Pre-compute và cache result → tránh expensive computation mỗi request.
     5. **Rate limiting**: Limit requests per key → tránh overload.
@@ -601,6 +804,7 @@
     5. **Lazy loading**: Load data on-demand, không cache all at once.
 
 ### Distributed Caching
+
 - [x] Đọc về "Redis Cluster" - how it works
     - **Redis Cluster**: Distributed Redis với automatic sharding, high availability.
     - **How it works**:
@@ -643,13 +847,13 @@
         - **Format**: Text file, human-readable.
         - **Frequency**: Every write (fsync có thể config: always, everysec, no).
 - [x] Compare: RDB vs AOF (5 criteria)
-    | Criteria | RDB | AOF |
-    |----------|-----|-----|
-    | **Data Safety** | Medium (có thể mất data giữa snapshots) | High (mọi write được log) |
-    | **File Size** | Small (compressed snapshot) | Large (mọi command được log) |
-    | **Recovery Speed** | Fast (load snapshot) | Slow (replay commands) |
-    | **Performance Impact** | Low (fork process, background) | Medium (fsync overhead) |
-    | **Use Case** | Backup, disaster recovery | High data safety requirement |
+  | Criteria | RDB | AOF |
+  |----------|-----|-----|
+  | **Data Safety** | Medium (có thể mất data giữa snapshots) | High (mọi write được log) |
+  | **File Size** | Small (compressed snapshot) | Large (mọi command được log) |
+  | **Recovery Speed** | Fast (load snapshot) | Slow (replay commands) |
+  | **Performance Impact** | Low (fork process, background) | Medium (fsync overhead) |
+  | **Use Case** | Backup, disaster recovery | High data safety requirement |
 - [x] Đọc về "Redis Pub/Sub" - use cases
     - **Redis Pub/Sub**: Publish-subscribe messaging pattern.
     - **How it works**: Publishers send messages tới channels, subscribers receive messages từ channels.
@@ -682,8 +886,10 @@
         - Monitor slow commands → optimize queries.
 
 ### Distributed Locking
+
 - [x] Đọc về "distributed locks" - why needed?
-    - **Distributed Locks**: Đảm bảo chỉ 1 process có thể execute critical section tại một thời điểm trong distributed system.
+    - **Distributed Locks**: Đảm bảo chỉ 1 process có thể execute critical section tại một thời điểm trong distributed
+      system.
     - **Why needed**:
         1. **Prevent race conditions**: Multiple processes update same resource → cần lock.
         2. **Resource access control**: Chỉ 1 process access resource (vd: file, database row).
@@ -708,7 +914,8 @@
     - **Why critical**:
         1. **Process crash**: Nếu process crash sau khi acquire lock → lock không được release → deadlock.
         2. **Network partition**: Process bị partition → không thể release lock → expiration giải quyết.
-        3. **Long operations**: Nếu operation lâu hơn expiration → lock expire → another process có thể acquire → race condition.
+        3. **Long operations**: Nếu operation lâu hơn expiration → lock expire → another process có thể acquire → race
+           condition.
     - **Solution**: Lock renewal (heartbeat) → extend expiration nếu operation chưa xong.
 - [x] Đọc về "Redlock algorithm" - distributed lock algorithm
     - **Redlock**: Distributed lock algorithm cho Redis, đảm bảo lock được acquire trên majority of nodes.
@@ -727,14 +934,15 @@
         1. **Complexity**: Phức tạp hơn single Redis lock.
         2. **Performance**: Phải communicate với nhiều nodes → slower.
         3. **Clock dependency**: Phụ thuộc vào clock synchronization → có thể có issues.
-        4. **Controversy**: Một số experts (vd: Martin Kleppmann) argue Redlock không đảm bảo safety trong một số edge cases.
+        4. **Controversy**: Một số experts (vd: Martin Kleppmann) argue Redlock không đảm bảo safety trong một số edge
+           cases.
 - [x] Đọc về "lease-based locking"
     - **Lease-based Locking**: Lock có "lease" (thời gian sở hữu), có thể renew lease để extend.
     - **How it works**:
         1. **Acquire lock**: Acquire lock với lease time (vd: 10 seconds).
         2. **Heartbeat**: Process gửi heartbeat để renew lease trước khi expire.
         3. **Auto-expire**: Nếu không có heartbeat → lock expire → another process có thể acquire.
-    - **Benefits**: 
+    - **Benefits**:
         - Cho phép long operations (renew lease).
         - Auto-release nếu process crash (no heartbeat).
     - **Implementation**: Redis với Lua script để atomic renew.
@@ -758,6 +966,7 @@
         4. **Lock-free algorithms**: Dùng lock-free data structures nếu có thể.
 
 ### Rate Limiting
+
 - [x] Đọc về "rate limiting" - why needed?
     - **Rate Limiting**: Giới hạn số requests một client có thể make trong một khoảng thời gian.
     - **Why needed**:
@@ -798,7 +1007,8 @@
             return false  // Reject request
     ```
 - [x] Đọc về "Leaky Bucket" algorithm
-    - **Leaky Bucket**: Bucket có fixed capacity, requests được add vào bucket, bucket "leak" (process) requests theo rate.
+    - **Leaky Bucket**: Bucket có fixed capacity, requests được add vào bucket, bucket "leak" (process) requests theo
+      rate.
     - **How it works**:
         1. **Bucket capacity**: Bucket có capacity (vd: 100 requests).
         2. **Leak rate**: Requests được process theo rate (vd: 10 requests/second).
@@ -866,15 +1076,16 @@
         2. **Counter**: Count requests trong current window.
         3. **Limit check**: Nếu counter < limit → allow, nếu không → reject.
         4. **Reset**: Khi window expires → counter reset về 0.
-    - **Features**: Simple, nhưng có thể có burst ở boundary (vd: 100 requests ở cuối window + 100 requests ở đầu window mới = 200 requests trong 2 giây).
+    - **Features**: Simple, nhưng có thể có burst ở boundary (vd: 100 requests ở cuối window + 100 requests ở đầu window
+      mới = 200 requests trong 2 giây).
 - [x] Compare: Rate limiting algorithms (5 criteria)
-    | Criteria | Token Bucket | Leaky Bucket | Sliding Window | Fixed Window |
-    |----------|-------------|--------------|----------------|--------------|
-    | **Burst Allowed** | Yes | No | Depends | Yes (at boundary) |
-    | **Smooth Rate** | No | Yes | Yes | No |
-    | **Accuracy** | Medium | High | High | Low (boundary issue) |
-    | **Complexity** | Low | Medium | Medium | Low |
-    | **Memory Usage** | Low | Medium | High (store timestamps) | Low |
+  | Criteria | Token Bucket | Leaky Bucket | Sliding Window | Fixed Window |
+  |----------|-------------|--------------|----------------|--------------|
+  | **Burst Allowed** | Yes | No | Depends | Yes (at boundary) |
+  | **Smooth Rate** | No | Yes | Yes | No |
+  | **Accuracy** | Medium | High | High | Low (boundary issue) |
+  | **Complexity** | Low | Medium | Medium | Low |
+  | **Memory Usage** | Low | Medium | High (store timestamps) | Low |
 - [x] Research: Redis-based rate limiting implementations
     1. **Fixed Window với Redis INCR**:
         - Key: `rate_limit:{user_id}:{window}`.
@@ -893,6 +1104,7 @@
         - Use Redis List như queue, process với background worker.
 
 ### Performance Optimization
+
 - [x] Đọc về "latency" vs "throughput" trade-offs
     - **Latency**: Thời gian để complete một request (vd: 10ms).
     - **Throughput**: Số requests có thể process trong một đơn vị thời gian (vd: 1000 QPS).
@@ -939,12 +1151,12 @@
     - **MessagePack**: Binary format, nhỏ hơn JSON ~30%, nhanh hơn ~2x.
     - **Protobuf**: Google's binary format, nhỏ nhất, nhanh nhất, nhưng cần schema definition.
 - [x] Compare: Serialization formats (performance, size)
-    | Format | Size | Serialization Speed | Deserialization Speed | Human Readable |
-    |--------|------|---------------------|----------------------|----------------|
-    | **JSON** | 100% (baseline) | 1x (baseline) | 1x (baseline) | Yes |
-    | **MessagePack** | ~70% | ~2x faster | ~2x faster | No |
-    | **Protobuf** | ~50-60% | ~3-5x faster | ~3-5x faster | No |
-    | **Java Serialization** | ~150% | Slower | Slower | No |
+  | Format | Size | Serialization Speed | Deserialization Speed | Human Readable |
+  |--------|------|---------------------|----------------------|----------------|
+  | **JSON** | 100% (baseline) | 1x (baseline) | 1x (baseline) | Yes |
+  | **MessagePack** | ~70% | ~2x faster | ~2x faster | No |
+  | **Protobuf** | ~50-60% | ~3-5x faster | ~3-5x faster | No |
+  | **Java Serialization** | ~150% | Slower | Slower | No |
 - [x] Đọc về "compression" - when to compress cache?
     - **Compression**: Compress data trước khi cache → giảm memory usage, network transfer time.
     - **When to compress**:
@@ -974,6 +1186,7 @@
 ## Redis Integration TODOs
 
 ### Task 1: Redis Setup & Basic Operations
+
 - [ ] Install: Redis server (local hoặc Docker)
 - [ ] Setup: Spring Boot với Redis dependency
 - [ ] Configure: Redis connection (host, port, password)
@@ -984,6 +1197,7 @@
 - [ ] Document: Redis setup
 
 ### Task 2: Cache-Aside Pattern Implementation
+
 - [ ] Create: Service class với cache-aside pattern
 - [ ] Implement: getData(key) - check cache first, then DB
 - [ ] Implement: updateData(key, value) - update DB, invalidate cache
@@ -996,6 +1210,7 @@
 - [ ] Document: Cache-Aside implementation
 
 ### Task 3: Write-Through Pattern Implementation
+
 - [ ] Implement: Write-Through pattern
 - [ ] Method: writeData(key, value) - write to cache và DB
 - [ ] Ensure: Atomicity (both succeed or both fail)
@@ -1007,6 +1222,7 @@
 - [ ] Document: Write-Through implementation
 
 ### Task 4: Write-Behind Pattern Implementation
+
 - [ ] Implement: Write-Behind pattern
 - [ ] Method: writeData(key, value) - write to cache, async to DB
 - [ ] Implement: Async DB write queue
@@ -1018,6 +1234,7 @@
 - [ ] Document: Write-Behind implementation
 
 ### Task 5: Redis Data Structures Usage
+
 - [ ] Implement: String operations (user profile cache)
 - [ ] Implement: Hash operations (user session cache)
 - [ ] Implement: List operations (recent activities)
@@ -1029,6 +1246,7 @@
 - [ ] Document: Data structure selection guide
 
 ### Task 6: Cache Invalidation Implementation
+
 - [ ] Implement: TTL-based invalidation
 - [ ] Configure: TTL cho different data types
 - [ ] Test: TTL expiration
@@ -1041,6 +1259,7 @@
 - [ ] Document: Invalidation strategy
 
 ### Task 7: Cache Warming Implementation
+
 - [ ] Identify: Hot data (frequently accessed)
 - [ ] Implement: Cache warming service
 - [ ] Load: Hot data vào cache on startup
@@ -1050,6 +1269,7 @@
 - [ ] Document: Cache warming strategy
 
 ### Task 8: Spring Cache Abstraction
+
 - [ ] Configure: Spring Cache với Redis
 - [ ] Annotate: Methods với @Cacheable
 - [ ] Annotate: Methods với @CacheEvict
@@ -1064,6 +1284,7 @@
 ## Performance Testing TODOs
 
 ### Benchmark 1: Cache Hit Rate Measurement
+
 - [ ] Setup: Application với cache
 - [ ] Generate: Realistic load (1000 requests)
 - [ ] Measure: Cache hit rate
@@ -1074,6 +1295,7 @@
 - [ ] Document: Hit rate analysis và improvements
 
 ### Benchmark 2: Latency Improvement
+
 - [ ] Measure: Baseline latency (without cache)
 - [ ] Measure: Latency với cache (p50, p95, p99)
 - [ ] Calculate: Latency improvement (%)
@@ -1084,6 +1306,7 @@
 - [ ] Document: Latency improvement analysis
 
 ### Benchmark 3: Throughput Testing
+
 - [ ] Measure: Baseline throughput (QPS without cache)
 - [ ] Measure: Throughput với cache (QPS)
 - [ ] Calculate: Throughput improvement (%)
@@ -1093,6 +1316,7 @@
 - [ ] Document: Throughput analysis
 
 ### Benchmark 4: Memory Usage Analysis
+
 - [ ] Measure: Redis memory usage
 - [ ] Calculate: Memory per cached item
 - [ ] Estimate: Total memory needed cho full cache
@@ -1103,6 +1327,7 @@
 - [ ] Document: Memory usage analysis
 
 ### Benchmark 5: Cache Pattern Comparison
+
 - [ ] Implement: Cache-Aside pattern
 - [ ] Measure: Read latency, write latency, hit rate
 - [ ] Implement: Write-Through pattern
@@ -1114,6 +1339,7 @@
 - [ ] Document: Pattern comparison
 
 ### Benchmark 6: Serialization Performance
+
 - [ ] Test: JSON serialization (Jackson)
 - [ ] Measure: Serialization time, deserialization time, size
 - [ ] Test: MessagePack serialization
@@ -1125,6 +1351,7 @@
 - [ ] Document: Serialization comparison
 
 ### Benchmark 7: Redis Operations Performance
+
 - [ ] Test: SET operation performance
 - [ ] Test: GET operation performance
 - [ ] Test: HSET/HGET operations performance
@@ -1139,6 +1366,7 @@
 ## Cache Failure TODOs
 
 ### Failure Scenario 1: Cache Breakdown
+
 - [ ] Simulate: Cache breakdown (all keys expire simultaneously)
 - [ ] Scenario: Cache miss storm hits database
 - [ ] Measure: Database load spike
@@ -1148,6 +1376,7 @@
 - [ ] Document: Cache breakdown mitigation
 
 ### Failure Scenario 2: Cache Penetration
+
 - [ ] Simulate: Cache penetration (query non-existent keys)
 - [ ] Scenario: Attacker queries random non-existent user IDs
 - [ ] Measure: Cache miss rate
@@ -1157,6 +1386,7 @@
 - [ ] Document: Cache penetration mitigation
 
 ### Failure Scenario 3: Hot Key Problem
+
 - [ ] Simulate: Hot key (single key gets 80% of requests)
 - [ ] Scenario: Popular product page, single cache key
 - [ ] Measure: Redis CPU usage
@@ -1167,6 +1397,7 @@
 - [ ] Document: Hot key mitigation
 
 ### Failure Scenario 4: Big Key Problem
+
 - [ ] Simulate: Big key (single key stores 10MB data)
 - [ ] Scenario: Large list hoặc hash trong single key
 - [ ] Measure: Memory usage
@@ -1177,6 +1408,7 @@
 - [ ] Document: Big key mitigation
 
 ### Failure Scenario 5: Redis Failure
+
 - [ ] Simulate: Redis server down
 - [ ] Test: Application behavior (fail gracefully?)
 - [ ] Measure: Latency impact (fallback to DB)
@@ -1187,6 +1419,7 @@
 - [ ] Document: Redis failure handling
 
 ### Failure Scenario 6: Cache Stampede
+
 - [ ] Simulate: Cache stampede (many requests for same expired key)
 - [ ] Scenario: Popular key expires, 1000 requests simultaneously
 - [ ] Measure: Database load spike
@@ -1195,6 +1428,7 @@
 - [ ] Document: Cache stampede mitigation
 
 ### Failure Scenario 7: Thundering Herd
+
 - [ ] Simulate: Thundering herd (many requests after cache miss)
 - [ ] Scenario: Cache miss, all requests hit database
 - [ ] Measure: Database connection pool exhaustion
@@ -1203,6 +1437,7 @@
 - [ ] Document: Thundering herd mitigation
 
 ### Degradation Testing
+
 - [ ] Test: System behavior với 0% cache hit rate
 - [ ] Measure: Performance degradation
 - [ ] Test: System behavior với 50% cache hit rate
@@ -1217,6 +1452,7 @@
 ## Concurrency & Lock TODOs
 
 ### Task 1: Distributed Lock Implementation
+
 - [ ] Implement: Distributed lock với Redis SET NX
 - [ ] Method: acquireLock(key, timeout)
 - [ ] Method: releaseLock(key)
@@ -1228,6 +1464,7 @@
 - [ ] Document: Distributed lock implementation
 
 ### Task 2: Redlock Algorithm Implementation
+
 - [ ] Implement: Redlock algorithm
 - [ ] Setup: Multiple Redis instances (3-5)
 - [ ] Implement: Lock acquisition across instances
@@ -1238,6 +1475,7 @@
 - [ ] Document: Redlock implementation
 
 ### Task 3: Lease-Based Locking
+
 - [ ] Implement: Lease-based locking
 - [ ] Add: Lock renewal mechanism
 - [ ] Add: Heartbeat để keep lock alive
@@ -1247,6 +1485,7 @@
 - [ ] Document: Lease-based locking
 
 ### Task 4: Lock Contention Analysis
+
 - [ ] Simulate: High lock contention (many threads compete)
 - [ ] Measure: Lock acquisition time
 - [ ] Measure: Throughput degradation
@@ -1256,6 +1495,7 @@
 - [ ] Document: Lock contention analysis
 
 ### Task 5: Optimistic Locking Implementation
+
 - [ ] Implement: Optimistic locking với version field
 - [ ] Add: Version check before update
 - [ ] Handle: OptimisticLockException
@@ -1265,6 +1505,7 @@
 - [ ] Document: Optimistic locking implementation
 
 ### Task 6: Rate Limiting Implementation
+
 - [ ] Implement: Token Bucket algorithm với Redis
 - [ ] Method: checkRateLimit(key, limit, window)
 - [ ] Test: Rate limiting enforcement
@@ -1275,6 +1516,7 @@
 - [ ] Document: Rate limiting implementation
 
 ### Task 7: Atomic Operations
+
 - [ ] Implement: Atomic increment với Redis INCR
 - [ ] Test: Concurrent increments
 - [ ] Verify: No race conditions
@@ -1284,6 +1526,7 @@
 - [ ] Document: Atomic operations usage
 
 ### Task 8: Race Condition Testing
+
 - [ ] Identify: Potential race conditions trong cache code
 - [ ] Simulate: Race conditions với concurrent requests
 - [ ] Test: Cache update race condition
@@ -1297,6 +1540,7 @@
 ## Review TODOs
 
 ### Self-Evaluation
+
 - [ ] Review: Tất cả Study TODOs hoàn thành?
 - [ ] Review: Tất cả Redis Integration tasks hoàn thành?
 - [ ] Review: Tất cả Performance Testing hoàn thành?
@@ -1311,6 +1555,7 @@
 - [ ] Plan: How to improve weak areas
 
 ### Performance Review
+
 - [ ] Review: All benchmark results
 - [ ] Verify: Performance targets met?
 - [ ] Identify: Top 3 performance improvements made
@@ -1321,6 +1566,7 @@
 - [ ] Document: Performance review findings
 
 ### Code Review
+
 - [ ] Review: Cache implementation code
 - [ ] Check: Cache patterns implemented correctly?
 - [ ] Check: Error handling adequate?
@@ -1333,6 +1579,7 @@
 - [ ] Document: Code review findings
 
 ### Architecture Review
+
 - [ ] Review: Caching architecture design
 - [ ] Check: Multi-layer caching appropriate?
 - [ ] Check: Cache invalidation strategy optimal?
@@ -1343,6 +1590,7 @@
 - [ ] Document: Architecture review
 
 ### Knowledge Check
+
 - [ ] Explain: Cache-Aside vs Write-Through vs Write-Behind (viết comparison, không xem notes)
 - [ ] Explain: Cache breakdown vs penetration (viết differences, không xem notes)
 - [ ] Explain: Hot key problem và solutions (viết analysis, không xem notes)
@@ -1354,6 +1602,7 @@
 - [ ] Document: Knowledge gaps
 
 ### Reflection
+
 - [ ] Write: 3 điều học được quan trọng nhất tuần này
 - [ ] Write: 2 caching concepts còn confuse
 - [ ] Write: 1 performance optimization bạn made và impact
@@ -1364,12 +1613,18 @@
 - [ ] Document: Week 5 reflection (500 words)
 
 ### Mentor Questions (Answer these - with numbers)
-- [ ] Q1: Cache hit rate = 60%, bạn muốn improve lên 85%. Làm sao? Measure improvement. (viết strategy với expected numbers)
-- [ ] Q2: Hot key problem - single key gets 10K requests/second. Redis CPU = 90%. Làm sao fix? Measure improvement. (viết solution với performance analysis)
+
+- [ ] Q1: Cache hit rate = 60%, bạn muốn improve lên 85%. Làm sao? Measure improvement. (viết strategy với expected
+  numbers)
+- [ ] Q2: Hot key problem - single key gets 10K requests/second. Redis CPU = 90%. Làm sao fix? Measure improvement. (
+  viết solution với performance analysis)
 - [ ] Q3: Cache breakdown - 1M keys expire cùng lúc, database overloaded. Làm sao prevent? (viết prevention strategy)
-- [ ] Q4: Distributed lock - 100 threads compete for same lock. Throughput drops 50%. Làm sao optimize? (viết optimization strategy với expected improvement)
-- [ ] Q5: Cache memory = 10GB, hit rate = 70%. Bạn có 5GB more memory. Expected hit rate improvement? Justify với calculation. (viết analysis với numbers)
-- [ ] Q6: Write-Through pattern - write latency = 50ms (cache) + 100ms (DB) = 150ms. Write-Behind có thể improve không? Expected improvement? (viết analysis với latency calculations)
+- [ ] Q4: Distributed lock - 100 threads compete for same lock. Throughput drops 50%. Làm sao optimize? (viết
+  optimization strategy với expected improvement)
+- [ ] Q5: Cache memory = 10GB, hit rate = 70%. Bạn có 5GB more memory. Expected hit rate improvement? Justify với
+  calculation. (viết analysis với numbers)
+- [ ] Q6: Write-Through pattern - write latency = 50ms (cache) + 100ms (DB) = 150ms. Write-Behind có thể improve không?
+  Expected improvement? (viết analysis với latency calculations)
 - [ ] Review: Answers có đủ numbers, measurements, và proof không?
 - [ ] Improve: Answers nếu cần
 
@@ -1391,4 +1646,6 @@
 
 ---
 
-> **Mentor Final Check**: Performance engineering là về numbers, không phải feelings. Nếu bạn không thể measure improvement, bạn không improve được gì. Hãy honest: Bạn có cache hit rate > 80% chưa? Bạn có latency improvement > 50% chưa? Bạn có fix được cache breakdown chưa? Nếu chưa, làm lại. Production systems cần proof, không cần assumptions.
+> **Mentor Final Check**: Performance engineering là về numbers, không phải feelings. Nếu bạn không thể measure
+> improvement, bạn không improve được gì. Hãy honest: Bạn có cache hit rate > 80% chưa? Bạn có latency improvement > 50%
+> chưa? Bạn có fix được cache breakdown chưa? Nếu chưa, làm lại. Production systems cần proof, không cần assumptions.
