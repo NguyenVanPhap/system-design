@@ -903,108 +903,289 @@
 
 ### Redis Data Structures
 
-- [x] Đọc về Redis String - use cases
-    - **Redis String**: Basic key-value store, value có thể là string, number, hoặc binary data (max 512MB).
-    - **Commands**: `SET`, `GET`, `INCR`, `DECR`, `APPEND`, `STRLEN`.
-    - **Use cases**:
-        1. **Simple caching**: User profiles, product info, configuration.
-        2. **Counters**: Page views, likes, shares (dùng `INCR`).
-        3. **Sessions**: User session data, authentication tokens.
-        4. **Flags**: Feature flags, boolean values.
-        5. **Serialized objects**: JSON, binary data.
-- [x] Đọc về Redis Hash - use cases
-    - **Redis Hash**: Key-value pairs trong một key, như object/dictionary.
-    - **Commands**: `HSET`, `HGET`, `HGETALL`, `HINCRBY`, `HDEL`.
-    - **Use cases**:
-        1. **User profiles**: `user:123` → `{name, email, age, ...}`.
-        2. **Shopping cart**: `cart:user:123` → `{product_id: quantity, ...}`.
-        3. **Object caching**: Cache entire objects, update individual fields.
-        4. **Configuration**: System configs với nhiều fields.
-        5. **Memory efficient**: Hash nhỏ hơn nhiều String keys riêng lẻ.
-- [x] Đọc về Redis List - use cases
-    - **Redis List**: Ordered collection, có thể push/pop từ đầu hoặc cuối.
-    - **Commands**: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, `LLEN`.
-    - **Use cases**:
-        1. **Message queues**: Simple queue, producer push, consumer pop.
-        2. **Activity feeds**: Recent activities, timeline.
-        3. **Task queues**: Background job queues.
-        4. **Recent items**: Last N items viewed, last N searches.
-        5. **Leaderboard (simple)**: List of top N (nhưng Sorted Set tốt hơn).
-- [x] Đọc về Redis Set - use cases
-    - **Redis Set**: Unordered collection of unique strings.
-    - **Commands**: `SADD`, `SREM`, `SMEMBERS`, `SISMEMBER`, `SINTER`, `SUNION`.
-    - **Use cases**:
-        1. **Tags**: Product tags, user interests.
-        2. **Unique tracking**: Unique visitors, unique IPs.
-        3. **Relationships**: Friends, followers, memberships.
-        4. **Set operations**: Intersection (common friends), union, difference.
-        5. **Blacklist/Whitelist**: Blocked users, allowed IPs.
-- [x] Đọc về Redis Sorted Set - use cases
-    - **Redis Sorted Set**: Set với score, tự động sort theo score.
-    - **Commands**: `ZADD`, `ZRANGE`, `ZREVRANGE`, `ZRANK`, `ZSCORE`, `ZINCRBY`.
-    - **Use cases**:
-        1. **Leaderboards**: Game scores, rankings (top N).
-        2. **Time-series data**: Events với timestamp as score.
-        3. **Priority queues**: Tasks với priority.
-        4. **Rate limiting**: Sliding window với timestamp.
-        5. **Top N queries**: Top products, top users by metric.
-- [x] Đọc về Redis Bitmap - use cases
-    - **Redis Bitmap**: String được treat như array of bits, operations trên bits.
-    - **Commands**: `SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`.
-    - **Use cases**:
-        1. **User activity tracking**: Daily active users, weekly active users.
-        2. **Feature flags per user**: Enable/disable features.
-        3. **Analytics**: Track events, conversions.
-        4. **Bloom filters**: Implement bloom filter để check existence.
-        5. **Memory efficient**: 1 bit per user → 1M users = 125KB.
-- [x] Đọc về Redis HyperLogLog - use cases
-    - **Redis HyperLogLog**: Probabilistic data structure để count unique elements.
-    - **Commands**: `PFADD`, `PFCOUNT`, `PFMERGE`.
-    - **Use cases**:
-        1. **Unique visitors**: Count unique IPs, unique users (approximate).
-        2. **Cardinality estimation**: Count distinct values (vd: distinct products viewed).
-        3. **Analytics**: Daily unique users, unique events.
-        4. **Memory efficient**: 12KB cho 2^64 unique elements (với error ~0.81%).
-        5. **Merge operations**: Combine multiple HyperLogLogs.
-- [x] Đọc về Redis Streams - use cases
-    - **Redis Streams**: Log-like data structure, append-only, support consumer groups.
-    - **Commands**: `XADD`, `XREAD`, `XREADGROUP`, `XRANGE`, `XACK`.
-    - **Use cases**:
-        1. **Message queues**: Reliable message queue với consumer groups.
-        2. **Event sourcing**: Store events, replay history.
-        3. **Activity logs**: User activity logs, audit trails.
-        4. **Real-time analytics**: Stream processing, event streams.
-        5. **Pub/Sub alternative**: More reliable than Pub/Sub (persistent messages).
+> Mục này được mở rộng theo hướng production cho backend engineers (Spring Boot/microservices/high traffic). Giữ nguyên 8 cấu trúc cốt lõi nhưng đi sâu vào cách hoạt động nội bộ, use case thực tế, anti-pattern và trade-off vận hành.
+
+#### 1) Redis String
+
+- [x] Đọc về Redis String - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Redis String lưu dưới dạng binary-safe byte array (SDS - Simple Dynamic String), hỗ trợ text, JSON, số, serialized object.
+    - Giá trị tối đa một key: 512MB. Các thao tác số (`INCR`, `DECR`) yêu cầu value parse được về integer.
+    - Với key nhỏ và workload hot, String thường là đường đi nhanh nhất vì metadata tối thiểu và command đơn giản.
+- **Key naming production**
+    - `user:123:profile`
+    - `session:token:ab12cd`
+    - `inventory:sku:iphone15:black`
+    - `rate_limit:api:/v1/orders:user:123`
+- **Scenario & commands thực tế**
+    - Cache profile trong API gateway (cache-aside):
+      - `GET user:123:profile`
+      - miss -> query DB -> `SET user:123:profile "{...json...}" EX 300`
+    - Counter realtime:
+      - `INCR metric:order:created:2025-01-12`
+      - `EXPIRE metric:order:created:2025-01-12 172800`
+    - Idempotency key cho payment callback:
+      - `SET idempotency:payment:txn_9988 "processed" NX EX 86400`
+- **Khi nên dùng**
+    - Cache object nguyên khối đọc nhiều/ghi ít.
+    - Atomic counter, rate-limit counter, distributed flag (`SET NX`).
+    - Session token lookup tốc độ cao.
+- **Khi không nên dùng**
+    - Object có nhiều field cần update lẻ tẻ (nên dùng Hash).
+    - Cần query theo score/range/ranking (nên dùng Sorted Set).
+- **Performance & scalability**
+    - `GET/SET/INCR` trung bình O(1).
+    - Nếu lưu JSON lớn, chi phí serialize/deserialize phía app tăng mạnh.
+    - Nhiều key String nhỏ có overhead keyspace đáng kể; cân nhắc Hash để gom field.
+- **So sánh nhanh**
+    - So với Hash: String đơn giản hơn nhưng kém hiệu quả khi partial update.
+    - So với Bitmap: String linh hoạt hơn, Bitmap tiết kiệm memory hơn cho boolean/bit flag.
+
+#### 2) Redis Hash
+
+- [x] Đọc về Redis Hash - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Hash là map field-value bên trong một key cha.
+    - Với hash nhỏ, Redis dùng encoding tối ưu bộ nhớ (listpack); khi lớn sẽ nâng cấp cấu trúc để tối ưu truy cập.
+    - Cho phép update một field mà không cần rewrite toàn bộ object như String JSON.
+- **Key naming production**
+    - `user:123:profile`
+    - `cart:user:123`
+    - `config:provider:netent`
+    - `wallet:user:123:balance`
+- **Scenario & commands thực tế**
+    - Shopping cart trong e-commerce service:
+      - `HSET cart:user:123 sku:ip15:128gb 2 sku:airpods:pro 1`
+      - `HINCRBY cart:user:123 sku:ip15:128gb 1`
+      - `HGETALL cart:user:123`
+    - User profile cache field-level:
+      - `HSET user:123:profile name "An" tier "gold" locale "vi_VN"`
+      - `HGET user:123:profile tier`
+- **Khi nên dùng**
+    - Object có nhiều thuộc tính và cần partial update thường xuyên.
+    - Dữ liệu profile/config/cart theo domain microservice.
+- **Khi không nên dùng**
+    - Cần thao tác thứ tự/ranking/time range.
+    - Cần lưu nested object sâu phức tạp rồi query phức tạp.
+- **Performance & scalability**
+    - `HSET/HGET/HINCRBY` trung bình O(1), `HGETALL` O(N field) nên tránh gọi trên hash rất lớn ở request path nóng.
+    - Memory thường tốt hơn việc tách hàng chục key String riêng lẻ.
+- **So sánh nhanh**
+    - So với String JSON: Hash thắng khi update field lẻ.
+    - So với RedisJSON module: Hash nhẹ hơn, nhưng thiếu query JSON path nâng cao.
+
+#### 3) Redis List
+
+- [x] Đọc về Redis List - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - List là chuỗi có thứ tự, tối ưu push/pop hai đầu.
+    - Redis hiện đại dùng quicklist (danh sách các listpack) để cân bằng memory và tốc độ.
+- **Key naming production**
+    - `queue:email:send`
+    - `feed:user:123`
+    - `retry:payment:webhook`
+- **Scenario & commands thực tế**
+    - Producer/Consumer đơn giản (job queue):
+      - Producer: `LPUSH queue:email:send "{jobId:1,...}"`
+      - Consumer: `BRPOP queue:email:send 5`
+    - Recent activities:
+      - `LPUSH feed:user:123 "order:created:9988"`
+      - `LTRIM feed:user:123 0 99` (giữ 100 event mới nhất)
+- **Mini architecture: List queue**
+    - Producer service đẩy job vào list.
+    - Worker service dùng `BRPOP` lấy job.
+    - Nhược điểm: nếu worker crash sau pop trước khi xử lý xong, message có thể mất (trừ khi tự thiết kế pending queue/ack pattern).
+- **Khi nên dùng**
+    - Queue đơn giản, throughput cao, yêu cầu reliability không quá khắt khe.
+    - Recent N items/feed ngắn hạn.
+- **Khi không nên dùng**
+    - Cần consumer group, replay, at-least-once rõ ràng (nên dùng Streams).
+- **Performance & scalability**
+    - Push/pop hai đầu O(1), range O(N).
+    - Với list cực lớn + `LRANGE` rộng dễ tạo latency spike.
+- **So sánh nhanh**
+    - So với Streams: List đơn giản hơn nhưng reliability và observability thấp hơn.
+
+#### 4) Redis Set
+
+- [x] Đọc về Redis Set - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Set lưu tập phần tử unique, không thứ tự.
+    - Membership check hiệu quả cao; hỗ trợ intersection/union/diff trực tiếp server-side.
+- **Key naming production**
+    - `user:123:roles`
+    - `product:sku123:tags`
+    - `abtest:exp42:variant:A:users`
+    - `fraud:blacklist:ip`
+- **Scenario & commands thực tế**
+    - Authorization cache:
+      - `SADD user:123:roles ROLE_ADMIN ROLE_FINANCE`
+      - `SISMEMBER user:123:roles ROLE_ADMIN`
+    - Gợi ý bạn chung sở thích:
+      - `SINTER user:123:interests user:456:interests`
+- **Khi nên dùng**
+    - Quan hệ unique: tags, roles, followers, blacklist/whitelist.
+    - Nghiệp vụ cần toán tử tập hợp.
+- **Khi không nên dùng**
+    - Cần sắp hạng theo điểm/thời gian (dùng Sorted Set).
+    - Cần duplicate element hoặc giữ thứ tự chèn.
+- **Performance & scalability**
+    - `SADD/SREM/SISMEMBER` trung bình O(1), toán tử tập hợp phụ thuộc số phần tử.
+    - `SMEMBERS` trên set lớn có thể nặng mạng và memory; ưu tiên scan/paging pattern.
+- **So sánh nhanh**
+    - So với List: Set loại bỏ duplicate tự nhiên.
+    - So với Sorted Set: Set không có score/rank.
+
+#### 5) Redis Sorted Set (ZSet)
+
+- [x] Đọc về Redis Sorted Set - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Mỗi member đi kèm score (double).
+    - Redis kết hợp hash table (tra member nhanh) + skiplist (duy trì thứ tự score) => hỗ trợ rank/range hiệu quả.
+- **Key naming production**
+    - `leaderboard:season:2025`
+    - `rate_limit:login:user:123`
+    - `ranking:seller:daily:2025-01-12`
+- **Scenario & commands thực tế**
+    - Leaderboard game:
+      - `ZADD leaderboard:season:2025 1890 user:123 2050 user:456`
+      - `ZREVRANGE leaderboard:season:2025 0 9 WITHSCORES`
+      - `ZINCRBY leaderboard:season:2025 20 user:123`
+    - Sliding window rate limiting:
+      - `ZADD rate_limit:login:user:123 1736661001 req_1`
+      - `ZREMRANGEBYSCORE rate_limit:login:user:123 0 1736660941`
+      - `ZCARD rate_limit:login:user:123`
+- **Khi nên dùng**
+    - Leaderboard, top-N, ranking theo điểm.
+    - Time-ordered event window.
+    - Priority queue theo score.
+- **Khi không nên dùng**
+    - Chỉ cần unique membership đơn giản (Set rẻ hơn).
+    - Chỉ cần key-value đơn giản (String/Hash).
+- **Performance & scalability**
+    - `ZADD/ZREM/ZRANK` O(log N), query range O(log N + M).
+    - Tốn memory hơn Set vì phải lưu cả score + cấu trúc sắp xếp.
+- **So sánh nhanh**
+    - So với Set: thêm khả năng rank nhưng đánh đổi memory và CPU.
+
+#### 6) Redis Bitmap
+
+- [x] Đọc về Redis Bitmap - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Bitmap không phải type riêng mà là String thao tác theo bit offset.
+    - Mỗi user/item ánh xạ vào 1 bit (0/1), cực kỳ tiết kiệm bộ nhớ cho trạng thái boolean quy mô lớn.
+- **Key naming production**
+    - `dau:2025-01-12`
+    - `feature:new_checkout:enabled`
+    - `attendance:course:redis:day:12`
+- **Scenario & commands thực tế**
+    - Daily Active Users (DAU):
+      - `SETBIT dau:2025-01-12 123 1`
+      - `SETBIT dau:2025-01-12 456 1`
+      - `BITCOUNT dau:2025-01-12`
+    - Tính WAU qua OR nhiều ngày:
+      - `BITOP OR wau:2025w02 dau:2025-01-06 dau:2025-01-07 ... dau:2025-01-12`
+      - `BITCOUNT wau:2025w02`
+- **Khi nên dùng**
+    - Bài toán cờ boolean khối lượng cực lớn: active/inactive, feature enabled, attendance.
+- **Khi không nên dùng**
+    - User ID thưa và rất lớn (offset quá cao gây nở String).
+    - Cần lưu metadata ngoài true/false.
+- **Performance & scalability**
+    - `SETBIT/GETBIT` O(1), `BITCOUNT` tuyến tính theo kích thước bitmap.
+    - Cực tiết kiệm memory: 1M user ~125KB cho 1 ngày.
+- **So sánh nhanh**
+    - So với Set user IDs: Bitmap tiết kiệm hơn nhiều, nhưng kém linh hoạt hơn.
+
+#### 7) Redis HyperLogLog
+
+- [x] Đọc về Redis HyperLogLog - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Cấu trúc probabilistic để ước lượng cardinality (số lượng phần tử unique).
+    - Không lưu từng phần tử như Set; dùng register thống kê -> sai số nhỏ (~0.81%) đổi lấy memory cố định (~12KB).
+- **Key naming production**
+    - `uv:site:2025-01-12`
+    - `uv:campaign:tet2025:daily:2025-01-12`
+    - `uv:api:/v1/orders:hour:10`
+- **Scenario & commands thực tế**
+    - Unique visitors/ngày:
+      - `PFADD uv:site:2025-01-12 user:123 user:456 ip:1.2.3.4`
+      - `PFCOUNT uv:site:2025-01-12`
+    - Gộp multi-service analytics:
+      - `PFMERGE uv:platform:2025-01-12 uv:web:2025-01-12 uv:mobile:2025-01-12`
+- **Khi nên dùng**
+    - Ước lượng unique count ở scale rất lớn, nơi sai số nhỏ chấp nhận được.
+- **Khi không nên dùng**
+    - Billing/financial/report pháp lý cần số chính xác tuyệt đối.
+    - Cần lấy danh sách phần tử unique thực tế.
+- **Performance & scalability**
+    - `PFADD/PFCOUNT` rất nhanh, memory gần như cố định.
+    - Lợi thế lớn trong hệ analytics realtime, log ingestion cao.
+- **So sánh nhanh**
+    - So với Set: Set chính xác nhưng memory nổ ở scale; HLL tiết kiệm nhưng chỉ approximate.
+
+#### 8) Redis Streams
+
+- [x] Đọc về Redis Streams - use cases (mở rộng)
+- **Cách hoạt động nội bộ**
+    - Streams là append-only log với message ID tăng dần (`msTime-seq`).
+    - Hỗ trợ consumer groups, pending entries list (PEL), `XACK`, replay lịch sử.
+    - Khác Pub/Sub: message được lưu bền trong stream cho đến khi trim/xóa.
+- **Key naming production**
+    - `stream:order:events`
+    - `stream:payment:callbacks`
+    - `stream:user:activity`
+- **Scenario & commands thực tế**
+    - Event-driven architecture (Order -> Payment -> Notification):
+      - Producer: `XADD stream:order:events * orderId 9988 status CREATED userId 123`
+      - Consumer group init: `XGROUP CREATE stream:order:events payment-service 0 MKSTREAM`
+      - Consumer read: `XREADGROUP GROUP payment-service consumer-1 COUNT 10 BLOCK 5000 STREAMS stream:order:events >`
+      - Ack sau xử lý thành công: `XACK stream:order:events payment-service 1736661100000-0`
+- **Mini architecture: List vs Streams**
+    - **List queue**: đơn giản, nhanh, nhưng ack/retry/replay phải tự build nhiều.
+    - **Streams**: phù hợp microservices production vì có consumer group, pending, replay, dead-letter pattern dễ triển khai hơn.
+- **Khi nên dùng**
+    - Event bus nội bộ, async processing, workflow nhiều consumer độc lập.
+    - Cần reliability cao hơn Pub/Sub.
+- **Khi không nên dùng**
+    - Chỉ broadcast best-effort realtime không cần persistence (Pub/Sub đơn giản hơn).
+    - Yêu cầu throughput cực lớn kiểu Kafka-scale dài hạn nhiều TB (nên cân nhắc Kafka/Pulsar).
+- **Performance & scalability**
+    - `XADD` rất nhanh; chi phí tăng khi có nhiều consumer group + pending backlog lớn.
+    - Cần chiến lược `XTRIM`/retention để tránh phình memory.
+
 - [x] Compare: Data structures (when to use which?)
-  | Structure | When to Use | Example |
-  |-----------|-------------|---------|
-  | **String** | Simple key-value, counters, sessions | `user:123`, `page:views:100` |
-  | **Hash** | Object với nhiều fields, partial updates | `user:123` → `{name, email, age}` |
-  | **List** | Ordered collection, queues, feeds | Activity feed, message queue |
-  | **Set** | Unique items, tags, relationships | User tags, friends list |
-  | **Sorted Set** | Ranked data, leaderboards, time-series | Game leaderboard, events by time |
-  | **Bitmap** | Boolean flags, activity tracking | Daily active users, feature flags |
-  | **HyperLogLog** | Approximate unique count | Unique visitors (approximate) |
-  | **Streams** | Message queues, event logs | Activity logs, event sourcing |
-- [x] Research: Memory efficiency của mỗi structure
-    - **String**: ~40-50 bytes overhead per key + value size. **Inefficient** cho small values.
-    - **Hash**: ~40 bytes overhead + (field_count × ~40 bytes) + values. **Efficient** cho objects với nhiều fields.
-    - **List**: ~40 bytes overhead + (element_count × ~40 bytes) + values. **Efficient** cho sequential data.
-    - **Set**: ~40 bytes overhead + (element_count × ~40 bytes) + values. **Efficient** cho unique collections.
-    - **Sorted Set**: ~40 bytes overhead + (element_count × ~80 bytes) + values + scores. **Less efficient** nhưng cần
-      cho ranking.
-    - **Bitmap**: ~40 bytes overhead + (bit_count / 8) bytes. **Very efficient** cho boolean flags (1 bit per item).
-    - **HyperLogLog**: ~12KB fixed size cho 2^64 elements. **Extremely efficient** cho cardinality estimation.
-    - **Streams**: ~40 bytes overhead + message size. **Efficient** cho append-only logs.
-- [x] Research: Performance characteristics của mỗi structure
-    - **String**: O(1) GET/SET, O(1) INCR. **Fastest** cho simple operations.
-    - **Hash**: O(1) HGET/HSET, O(N) HGETALL. **Fast** cho field access, slow cho full object.
-    - **List**: O(1) LPUSH/RPOP, O(N) LRANGE. **Fast** cho queue operations.
-    - **Set**: O(1) SADD/SISMEMBER, O(N) SMEMBERS. **Fast** cho membership check.
-    - **Sorted Set**: O(log N) ZADD/ZRANK, O(log N + M) ZRANGE. **Fast** cho ranking, slower than Set.
-    - **Bitmap**: O(1) SETBIT/GETBIT, O(N) BITCOUNT. **Very fast** cho bit operations.
-    - **HyperLogLog**: O(1) PFADD, O(1) PFCOUNT. **Very fast** cho cardinality.
-    - **Streams**: O(1) XADD, O(N) XREAD. **Fast** cho append, efficient cho streaming.
+
+| Structure | Khi nên dùng | Ví dụ key production |
+|-----------|---------------|----------------------|
+| **String** | Key-value đơn giản, counter, session/idempotency | `session:token:abc`, `metric:orders:2025-01-12` |
+| **Hash** | Object nhiều fields, update field lẻ | `user:123:profile`, `cart:user:123` |
+| **List** | Queue/feed đơn giản, recent N items | `queue:email:send`, `feed:user:123` |
+| **Set** | Unique membership, tags/roles/blacklist | `user:123:roles`, `fraud:blacklist:ip` |
+| **Sorted Set** | Ranking, top-N, time-window/rate-limit | `leaderboard:season:2025`, `rate_limit:login:user:123` |
+| **Bitmap** | Boolean ở scale lớn (DAU/feature flags) | `dau:2025-01-12` |
+| **HyperLogLog** | Approximate unique count (analytics) | `uv:site:2025-01-12` |
+| **Streams** | Event log + consumer group + ack/replay | `stream:order:events` |
+
+- [x] Research: Memory efficiency của mỗi structure (production note)
+    - **String**: overhead key cao nếu tách quá nhiều key nhỏ.
+    - **Hash**: hiệu quả cho object nhiều field, giảm overhead keyspace.
+    - **List**: tốt cho queue/feed, nhưng list rất dài cần trim.
+    - **Set**: hợp lý cho unique collection, cần chú ý cardinality lớn.
+    - **Sorted Set**: tốn bộ nhớ nhất trong nhóm set do score + index.
+    - **Bitmap**: tối ưu cực mạnh cho boolean density cao.
+    - **HyperLogLog**: ~12KB gần như cố định, rất phù hợp hệ analytics.
+    - **Streams**: hiệu quả cho append log, nhưng cần retention/trim để kiểm soát memory.
+
+- [x] Research: Performance characteristics của mỗi structure (production note)
+    - **String**: O(1) read/write/counter, nhanh nhất cho KV đơn giản.
+    - **Hash**: O(1) field ops, tránh `HGETALL` trên object lớn trong request path.
+    - **List**: O(1) push/pop hai đầu, range lớn thì O(N).
+    - **Set**: O(1) membership, set-ops phụ thuộc kích thước tập.
+    - **Sorted Set**: O(log N) update/rank, đổi lại query top-N rất tốt.
+    - **Bitmap**: bit ops nhanh, aggregate (`BITCOUNT`) phụ thuộc size bitmap.
+    - **HyperLogLog**: thao tác rất nhanh và memory ổn định, đánh đổi độ chính xác.
+    - **Streams**: append nhanh, nhưng cần monitor lag/pending/consumer health.
 
 ### Cache Problems & Solutions
 
