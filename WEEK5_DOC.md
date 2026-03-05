@@ -255,6 +255,280 @@
         - **High temporal locality**: User session, hot products, trending content.
         - **High spatial locality**: Sequential file reads, array traversal.
         - **Low locality**: Random database queries, full table scans → không nên cache.
+          Bạn đang hiểu đúng rồi 👍 Mình sẽ giải thích lại theo cách **gắn với thực tế backend/Spring/JPA** để bạn dễ liên hệ với hệ thống thật (nhất là mấy hệ thống traffic lớn như bạn đang làm).
+
+    ---
+    
+    # 1️⃣ Locality of Reference là gì?
+    
+    **Locality of Reference** = xu hướng chương trình truy cập dữ liệu theo “mẫu lặp lại”.
+    
+    Có 2 loại chính:
+    
+    ---
+    
+    # 2️⃣ Temporal Locality (Tính cục bộ theo thời gian)
+    
+    > Dữ liệu vừa được truy cập gần đây → rất có khả năng sẽ được truy cập lại sớm.
+    
+    ### Ví dụ đời thực backend:
+    
+    ### ✅ 1. User session
+    
+    * User login
+      * Hệ thống load `UserProfile`
+      * Trong 5 phút tiếp theo:
+    
+          * gọi API get wallet
+          * get transaction history
+          * update profile
+            → đều cần lại user đó
+    
+    👉 Cực kỳ high temporal locality
+    
+    ---
+    
+    ### ✅ 2. Hot product / Trending content
+    
+    * Sản phẩm đang flash sale
+      * 10.000 request trong 5 phút
+        → cùng 1 productId
+    
+    👉 Cache rất hiệu quả
+    
+    ---
+    
+    ## Cache strategy tận dụng Temporal Locality
+    
+    ### 🔹 LRU (Least Recently Used)
+    
+    Giữ lại những data **vừa được dùng gần đây**.
+    
+    Ví dụ:
+    
+    ```
+    Cache size = 3
+    Access: A → B → C → A → D
+    
+    Cache state:
+    A B C
+    A B C  (A vừa được dùng)
+    A C D  (B bị loại vì lâu nhất)
+    ```
+    
+    👉 Caffeine cache trong Spring thường dùng LRU/LFU để tận dụng temporal locality.
+    
+    ---
+    
+    # 3️⃣ Spatial Locality (Tính cục bộ theo không gian)
+    
+    > Nếu truy cập 1 địa chỉ bộ nhớ → có khả năng truy cập các địa chỉ gần nó.
+    
+    ---
+    
+    ## Ví dụ low-level (CPU / OS)
+    
+    ### ✅ 1. Array traversal
+    
+    ```java
+    for (int i = 0; i < arr.length; i++) {
+        sum += arr[i];
+    }
+    ```
+    
+    CPU không load từng phần tử.
+    Nó load **cả cache line (64 bytes)**.
+    
+    → arr[i+1], arr[i+2] đã nằm sẵn trong cache
+    
+    👉 Spatial locality cực cao
+    
+    ---
+    
+    ### ✅ 2. Disk read
+    
+    Khi đọc file:
+    
+    * Không đọc từng byte
+      * Mà đọc theo block (4KB, 8KB…)
+    
+    → dù bạn chỉ cần 100 bytes, hệ thống vẫn load cả block
+    
+    👉 Vì có khả năng bạn sẽ đọc tiếp vùng gần đó
+    
+    ---
+    
+    ## Cache strategy tận dụng Spatial Locality
+    
+    * Block-based caching
+      * Prefetching
+      * CPU cache line
+      * Read-ahead trong file system
+    
+    ---
+    
+    # 4️⃣ So sánh dễ hiểu
+    
+    |                   | Temporal          | Spatial              |
+    | ----------------- | ----------------- | -------------------- |
+    | Phụ thuộc vào     | Thời gian         | Vị trí               |
+    | Ví dụ             | User session      | Array traversal      |
+    | Tận dụng bởi      | LRU, LFU          | Prefetch, block read |
+    | Xuất hiện nhiều ở | Application level | CPU / OS level       |
+    
+    ---
+    
+    # 5️⃣ Tại sao locality quyết định cache hiệu quả?
+    
+    Cache chỉ hiệu quả nếu:
+    
+    ```
+    Cache hit rate cao
+    ```
+    
+    Cache hit rate cao khi:
+    
+    ```
+    Access pattern có locality
+    ```
+    
+    ---
+    
+    ## 🚨 Trường hợp Low Locality
+    
+    ### ❌ Random access
+    
+    Ví dụ:
+    
+    ```sql
+    SELECT * FROM users WHERE id = random();
+    ```
+    
+    Mỗi request 1 user khác nhau
+    
+    → cache miss liên tục
+    
+    ---
+    
+    ### ❌ Full table scan
+    
+    ```sql
+    SELECT * FROM transaction;
+    ```
+    
+    * Scan toàn bộ
+      * Data không lặp lại
+        → cache không giúp gì
+    
+    ---
+    
+    ### ❌ Analytics query random time range
+    
+    ```
+    last 7 days
+    last 3 months
+    last 11 days
+    last 2 hours
+    ```
+    
+    → pattern không lặp lại
+    
+    ---
+    
+    # 6️⃣ Real backend architecture liên hệ với bạn
+    
+    Vì bạn đang làm Spring + JPA + hệ thống lớn, mình lấy ví dụ sát thực tế:
+    
+    ---
+    
+    ## 🔥 Case 1: Wallet balance
+    
+    High temporal locality.
+    
+    Giải pháp:
+    
+    * L1: Caffeine per node
+      * L2: Redis shared
+    
+    → Vì 1 user có thể spam request check balance
+    
+    ---
+    
+    ## 🔥 Case 2: Report outstanding provider
+    
+    Low temporal locality.
+    
+    * Query mỗi lần khác nhau
+      * Tham số khác nhau
+      * Date range khác nhau
+    
+    👉 Không nên cache
+    
+    ---
+    
+    ## 🔥 Case 3: Provider config / Bet limit
+    
+    High temporal + spatial locality.
+    
+    * Load config theo providerId
+      * Thường ít thay đổi
+    
+    👉 Cache rất hiệu quả
+    
+    ---
+    
+    # 7️⃣ Quan trọng: Cache làm chậm khi locality thấp
+    
+    Vì:
+    
+    * Tốn CPU serialize
+      * Tốn memory
+      * Tốn lock
+      * Tốn network (Redis)
+    
+    Nếu miss rate cao:
+    
+    ```
+    Cache lookup cost > direct DB cost
+    ```
+    
+    → Cache trở thành bottleneck
+    
+    ---
+    
+    # 8️⃣ Một insight nâng cao (rất quan trọng)
+    
+    Locality không chỉ là property của data.
+    
+    👉 Nó là property của workload.
+    
+    Ví dụ:
+    
+    * Bình thường product A không hot
+      * Nhưng flash sale 5 phút
+        → Temporal locality tăng đột biến
+    
+    Cache suddenly hiệu quả.
+    
+    ---
+    
+    # 9️⃣ Tóm tắt cực ngắn
+    
+    Temporal locality = vừa dùng xong sẽ dùng lại
+    Spatial locality = gần nhau sẽ dùng chung
+    
+    Cache hiệu quả khi:
+    
+    * Pattern lặp lại
+      * Không random
+    
+    Cache vô dụng khi:
+    
+    * Access pattern random
+      * Tham số thay đổi liên tục
+    
+    ---
+
 - [x] Đọc về "cache coherence" - consistency across caches
     - **Cache Coherence**: Đảm bảo tất cả caches có **consistent view** của data.
     - **Vấn đề**: Khi data được update ở một nơi, các cache khác có thể vẫn giữ **stale data**.
